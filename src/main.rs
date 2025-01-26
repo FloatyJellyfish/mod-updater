@@ -1,12 +1,21 @@
 #![allow(unused)]
 
+use clap::{Parser, Subcommand, ValueEnum};
 use core::fmt::Error;
-use reqwest::Client;
+use reqwest::{get, Client, ClientBuilder};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::io::{prelude::*, BufReader};
 use tokio;
+
+static APP_USER_AGENT: &str = concat!(
+    "FloatyJellyfish",
+    "/",
+    env!("CARGO_PKG_NAME"),
+    "/",
+    env!("CARGO_PKG_VERSION"),
+);
 
 #[derive(Debug, Deserialize)]
 struct Version {
@@ -105,12 +114,60 @@ struct Hash {
     sha1: String,
 }
 
+#[derive(Parser)]
+#[command(name = "Mod Updater")]
+#[command(version)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand, Clone)]
+enum Commands {
+    /// Search versions for provided mod
+    Version {
+        mod_name: String,
+        loader: Option<Loaders>,
+    },
+}
+
+#[derive(Clone, ValueEnum)]
+enum Loaders {
+    Fabric,
+    Forge,
+    NeoForge,
+    Quilt,
+    LiteLoader,
+}
+
+impl Display for Loaders {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let str = match self {
+            Loaders::Fabric => "fabric",
+            Loaders::Forge => "forge",
+            Loaders::NeoForge => "neoforge",
+            Loaders::Quilt => "quilt",
+            Loaders::LiteLoader => "liteloader",
+        };
+        write!(f, "{str}")
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), reqwest::Error> {
+    let cli = Cli::parse();
+    let client = ClientBuilder::new().user_agent(APP_USER_AGENT).build()?;
+
+    match cli.command {
+        Commands::Version { mod_name, loader } => {
+            list_versions(&client, mod_name, loader).await?;
+        }
+    }
+
+    return Ok(());
+
     let file = std::fs::File::open("./modlist.txt").unwrap();
     let reader = BufReader::new(file);
-
-    let client = Client::new();
 
     let mut version_support = HashMap::new();
     let lines: Vec<std::io::Result<String>> = reader.lines().collect();
@@ -171,6 +228,45 @@ async fn main() -> Result<(), reqwest::Error> {
     // );
     println!("Max compatible version {}", compatible_versions[0]);
     println!();
+
+    Ok(())
+}
+
+async fn list_versions(
+    client: &Client,
+    mod_name: String,
+    loader: Option<Loaders>,
+) -> Result<(), reqwest::Error> {
+    let request = client.get(format!(
+        "https://api.modrinth.com/v2/project/{mod_name}/version"
+    ));
+    let request = if let Some(loader) = loader {
+        request.query(&[("loaders", format!("[\"{loader}\"]"))])
+    } else {
+        request
+    };
+    let res = request.send().await?;
+    if res.status().is_success() {
+        let versions: Vec<Version> = res.json().await?;
+        println!("Mod versions for '{mod_name}':");
+        for version in versions {
+            println!(
+                "\t{} - {} {}",
+                version.name,
+                version.game_versions.join(", "),
+                version.loaders.join(", ")
+            );
+        }
+    } else {
+        if res.status().as_u16() == 404 {
+            println!("Mod '{mod_name}' not found");
+        } else {
+            println!(
+                "Unexpected error: {}",
+                res.status().canonical_reason().unwrap_or("Unknown error")
+            );
+        }
+    }
 
     Ok(())
 }

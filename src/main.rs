@@ -124,8 +124,8 @@ struct Cli {
 
 #[derive(Subcommand, Clone)]
 enum Commands {
-    /// Search versions for provided mod
-    Version {
+    /// List all versions for a mod
+    Versions {
         /// Mod slug or id
         mod_name: String,
         /// Filter by mod loader
@@ -133,6 +133,15 @@ enum Commands {
         loader: Option<Loaders>,
         /// Filter by game version (e.g. 1.21.4)
         #[arg(short, long)]
+        game_version: Option<String>,
+    },
+    /// Get latest version of a mod for a given mod loader
+    Latest {
+        /// Mod slug or id
+        mod_name: String,
+        /// Filter by mod loader
+        loader: Loaders,
+        /// Filter by game version (e.g. 1.21.4)
         game_version: Option<String>,
     },
 }
@@ -165,12 +174,19 @@ async fn main() -> Result<(), reqwest::Error> {
     let client = ClientBuilder::new().user_agent(APP_USER_AGENT).build()?;
 
     match cli.command {
-        Commands::Version {
+        Commands::Versions {
             mod_name,
             loader,
             game_version,
         } => {
             list_versions(&client, mod_name, loader, game_version).await?;
+        }
+        Commands::Latest {
+            mod_name,
+            loader,
+            game_version,
+        } => {
+            get_latest_version(&client, mod_name, loader, game_version).await?;
         }
     }
 
@@ -284,5 +300,45 @@ async fn list_versions(
         }
     }
 
+    Ok(())
+}
+
+async fn get_latest_version(
+    client: &Client,
+    mod_name: String,
+    loader: Loaders,
+    game_version: Option<String>,
+) -> Result<(), reqwest::Error> {
+    let request = client
+        .get(format!(
+            "https://api.modrinth.com/v2/project/{mod_name}/version"
+        ))
+        .query(&[("loaders", format!("[\"{loader}\"]"))]);
+
+    let request = if let Some(game_version) = game_version {
+        request.query(&[("game_versions", format!("[\"{game_version}\"]"))])
+    } else {
+        request
+    };
+    let res = request.send().await?;
+    if res.status().is_success() {
+        let versions: Vec<Version> = res.json().await?;
+        let latest = versions.first();
+        println!("Latest version for mod '{mod_name}':");
+        if let Some(latest) = latest {
+            println!("\t{} - {}", latest.name, latest.game_versions.join(", "));
+        } else {
+            println!("No versions found for mod '{mod_name}'");
+        }
+    } else {
+        if res.status().as_u16() == 404 {
+            println!("Mod '{mod_name}' not found");
+        } else {
+            println!(
+                "Unexpected error: {}",
+                res.status().canonical_reason().unwrap_or("Unknown error")
+            );
+        }
+    }
     Ok(())
 }

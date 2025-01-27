@@ -126,8 +126,14 @@ struct Cli {
 enum Commands {
     /// Search versions for provided mod
     Version {
+        /// Mod slug or id
         mod_name: String,
+        /// Filter by mod loader
+        #[arg(short, long)]
         loader: Option<Loaders>,
+        /// Filter by game version (e.g. 1.21.4)
+        #[arg(short, long)]
+        game_version: Option<String>,
     },
 }
 
@@ -159,8 +165,12 @@ async fn main() -> Result<(), reqwest::Error> {
     let client = ClientBuilder::new().user_agent(APP_USER_AGENT).build()?;
 
     match cli.command {
-        Commands::Version { mod_name, loader } => {
-            list_versions(&client, mod_name, loader).await?;
+        Commands::Version {
+            mod_name,
+            loader,
+            game_version,
+        } => {
+            list_versions(&client, mod_name, loader, game_version).await?;
         }
     }
 
@@ -236,12 +246,18 @@ async fn list_versions(
     client: &Client,
     mod_name: String,
     loader: Option<Loaders>,
+    game_version: Option<String>,
 ) -> Result<(), reqwest::Error> {
     let request = client.get(format!(
         "https://api.modrinth.com/v2/project/{mod_name}/version"
     ));
     let request = if let Some(loader) = loader {
         request.query(&[("loaders", format!("[\"{loader}\"]"))])
+    } else {
+        request
+    };
+    let request = if let Some(game_version) = game_version {
+        request.query(&[("game_versions", format!("[\"{game_version}\"]"))])
     } else {
         request
     };

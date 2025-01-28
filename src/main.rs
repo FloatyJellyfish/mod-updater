@@ -1,12 +1,16 @@
 #![allow(unused)]
 
 use clap::{Parser, Subcommand, ValueEnum};
+use mod_updater::Error;
+use modrinth::{GameVersion, Version};
 use reqwest::{get, Client, ClientBuilder, StatusCode};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::io::{prelude::*, BufReader};
 use tokio;
+
+mod modrinth;
 
 static APP_USER_AGENT: &str = concat!(
     "FloatyJellyfish",
@@ -15,145 +19,6 @@ static APP_USER_AGENT: &str = concat!(
     "/",
     env!("CARGO_PKG_VERSION"),
 );
-
-enum Error {
-    Reqwest(reqwest::Error),
-    NotFound,
-    StatusCode(StatusCode),
-    NoVersionsFound,
-    InvalidIndex,
-    NoFilesFound,
-    Io(std::io::Error),
-}
-
-impl From<reqwest::Error> for Error {
-    fn from(value: reqwest::Error) -> Self {
-        Self::Reqwest(value)
-    }
-}
-
-impl From<StatusCode> for Error {
-    fn from(value: StatusCode) -> Self {
-        Self::StatusCode(value)
-    }
-}
-
-impl From<std::io::Error> for Error {
-    fn from(value: std::io::Error) -> Self {
-        Error::Io(value)
-    }
-}
-
-impl Debug for Error {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Reqwest(arg0) => f.debug_tuple("Reqwest").field(arg0).finish(),
-            Self::NotFound => write!(f, "Mod not found"),
-            Self::StatusCode(arg0) => f.debug_tuple("StatusCode").field(arg0).finish(),
-            Self::NoVersionsFound => write!(f, "No mod versions found"),
-            Self::InvalidIndex => write!(f, "Invalid index"),
-            Self::NoFilesFound => write!(f, "No files found"),
-            Self::Io(arg0) => f.debug_tuple("IO").field(arg0).finish(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct Version {
-    name: String,
-    version_number: String,
-    changelog: Option<String>,
-    dependencies: Vec<Dependency>,
-    game_versions: Vec<String>,
-    version_type: String,
-    loaders: Vec<String>,
-    featured: bool,
-    status: String,
-    requested_status: Option<String>,
-    id: String,
-    project_id: String,
-    author_id: String,
-    date_published: String,
-    downloads: i32,
-    changelog_url: Option<String>,
-    files: Vec<File>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Dependency {
-    version_id: Option<String>,
-    project_id: Option<String>,
-    file_name: Option<String>,
-    dependency_type: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct File {
-    hashes: Hash,
-    url: String,
-    filename: String,
-    primary: bool,
-    size: i32,
-    file_type: Option<String>,
-}
-
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct GameVersion {
-    major: usize,
-    minor: usize,
-    patch: usize,
-}
-
-impl From<String> for GameVersion {
-    fn from(value: String) -> Self {
-        let parts: Vec<&str> = value.split(".").collect();
-        let mut major = 0;
-        let mut minor = 0;
-        let mut patch = 0;
-
-        if parts.len() >= 1 {
-            major = parts[0].parse::<usize>().unwrap();
-        }
-
-        if parts.len() >= 2 {
-            minor = parts[1].parse::<usize>().unwrap();
-        }
-
-        if parts.len() >= 3 {
-            patch = parts[2].parse::<usize>().unwrap();
-        }
-
-        Self {
-            major,
-            minor,
-            patch,
-        }
-    }
-}
-
-impl Display for GameVersion {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
-        if (self.patch != 0) {
-            write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
-        } else if (self.minor != 0) {
-            write!(f, "{}.{}", self.major, self.minor)
-        } else {
-            write!(f, "{}", self.major)
-        }
-    }
-}
-
-impl std::fmt::Debug for GameVersion {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
-        std::fmt::Display::fmt(&self, f)
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct Hash {
-    sha512: String,
-    sha1: String,
-}
 
 #[derive(Parser)]
 #[command(name = "Mod Updater")]

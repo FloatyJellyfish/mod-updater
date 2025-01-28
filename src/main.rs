@@ -144,6 +144,14 @@ enum Commands {
         /// Filter by game version (e.g. 1.21.4)
         game_version: Option<String>,
     },
+    Download {
+        /// Mod slug or id
+        mod_name: String,
+        /// Filter by mod loader
+        loader: Loaders,
+        /// Filter by game version (e.g. 1.21.4)
+        game_version: String,
+    },
 }
 
 #[derive(Clone, ValueEnum)]
@@ -187,6 +195,13 @@ async fn main() -> Result<(), reqwest::Error> {
             game_version,
         } => {
             get_latest_version(&client, mod_name, loader, game_version).await?;
+        }
+        Commands::Download {
+            mod_name,
+            loader,
+            game_version,
+        } => {
+            download_mod(&client, mod_name, loader, game_version).await?;
         }
     }
 
@@ -340,5 +355,108 @@ async fn get_latest_version(
             );
         }
     }
+    Ok(())
+}
+
+async fn download_mod(
+    client: &Client,
+    mod_name: String,
+    loader: Loaders,
+    game_version: String,
+) -> Result<(), reqwest::Error> {
+    let request = client
+        .get(format!(
+            "https://api.modrinth.com/v2/project/{mod_name}/version"
+        ))
+        .query(&[
+            ("loaders", format!("[\"{loader}\"]")),
+            ("game_versions", format!("[\"{game_version}\"]")),
+        ]);
+
+    let res = request.send().await?;
+
+    if !res.status().is_success() {
+        if res.status().as_u16() == 404 {
+            println!("Mod '{mod_name}' not found");
+            return Ok(());
+        }
+
+        println!(
+            "Unexpected error: {}",
+            res.status().canonical_reason().unwrap_or("Unknown error")
+        );
+
+        return Ok(());
+    }
+
+    let versions: Vec<Version> = res.json().await?;
+    if versions.len() == 0 {
+        println!("No versions found");
+        return Ok(());
+    }
+
+    let mut buffer = String::new();
+    let stdin = std::io::stdin();
+
+    println!("Available versions:");
+    for (i, version) in versions.iter().enumerate() {
+        println!("\t{i} - {}", version.name);
+    }
+    println!("Select version (0-{}):", versions.len() - 1);
+    stdin.read_line(&mut buffer);
+    let version_i: usize = if let Ok(version_i) = buffer.trim().parse() {
+        if version_i >= versions.len() {
+            println!("Invalid index");
+            return Ok(());
+        }
+        version_i
+    } else {
+        println!("Please enter a number");
+        return Ok(());
+    };
+
+    let version = &versions[version_i];
+
+    println!("Available files:");
+    for (i, file) in version.files.iter().enumerate() {
+        println!("\t{i} - {}", file.filename);
+    }
+
+    println!("Select file (0-{}):", version.files.len() - 1);
+    let mut buffer = String::new();
+    stdin.read_line(&mut buffer);
+    let file_i: usize = if let Ok(file_i) = buffer.trim().parse() {
+        if file_i >= versions.len() {
+            println!("Invalid index");
+            return Ok(());
+        }
+        file_i
+    } else {
+        println!("Please enter a number");
+        return Ok(());
+    };
+
+    let file = &version.files[file_i];
+
+    let request = client.get(file.url.clone());
+
+    let res = request.send().await?;
+
+    let bytes = res.bytes().await?;
+
+    let file = std::fs::File::create(file.filename.clone());
+
+    let mut file = match file {
+        Err(err) => {
+            println!("Unable to open file: {:?}", err);
+            return Ok(());
+        }
+        Ok(file) => file,
+    };
+
+    if let Err(err) = file.write(&bytes) {
+        println!("Unable to write to file: {:?}", err);
+    }
+
     Ok(())
 }

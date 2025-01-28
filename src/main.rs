@@ -1,11 +1,10 @@
 #![allow(unused)]
 
 use clap::{Parser, Subcommand, ValueEnum};
-use core::fmt::Error;
-use reqwest::{get, Client, ClientBuilder};
+use reqwest::{get, Client, ClientBuilder, StatusCode};
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::fmt::{Display, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::io::{prelude::*, BufReader};
 use tokio;
 
@@ -91,7 +90,7 @@ impl From<String> for GameVersion {
 }
 
 impl Display for GameVersion {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
         if (self.patch != 0) {
             write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
         } else if (self.minor != 0) {
@@ -103,7 +102,7 @@ impl Display for GameVersion {
 }
 
 impl std::fmt::Debug for GameVersion {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
         std::fmt::Display::fmt(&self, f)
     }
 }
@@ -177,7 +176,7 @@ impl Display for Loaders {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), reqwest::Error> {
+async fn main() -> Result<(), Error> {
     let cli = Cli::parse();
     let client = ClientBuilder::new().user_agent(APP_USER_AGENT).build()?;
 
@@ -278,41 +277,16 @@ async fn list_versions(
     mod_name: String,
     loader: Option<Loaders>,
     game_version: Option<String>,
-) -> Result<(), reqwest::Error> {
-    let request = client.get(format!(
-        "https://api.modrinth.com/v2/project/{mod_name}/version"
-    ));
-    let request = if let Some(loader) = loader {
-        request.query(&[("loaders", format!("[\"{loader}\"]"))])
-    } else {
-        request
-    };
-    let request = if let Some(game_version) = game_version {
-        request.query(&[("game_versions", format!("[\"{game_version}\"]"))])
-    } else {
-        request
-    };
-    let res = request.send().await?;
-    if res.status().is_success() {
-        let versions: Vec<Version> = res.json().await?;
-        println!("Mod versions for '{mod_name}':");
-        for version in versions {
-            println!(
-                "\t{} - {} {}",
-                version.name,
-                version.game_versions.join(", "),
-                version.loaders.join(", ")
-            );
-        }
-    } else {
-        if res.status().as_u16() == 404 {
-            println!("Mod '{mod_name}' not found");
-        } else {
-            println!(
-                "Unexpected error: {}",
-                res.status().canonical_reason().unwrap_or("Unknown error")
-            );
-        }
+) -> Result<(), Error> {
+    let versions = get_versions(client, &mod_name, loader, game_version).await?;
+    println!("Mod versions for '{mod_name}':");
+    for version in versions {
+        println!(
+            "\t{} - {} {}",
+            version.name,
+            version.game_versions.join(", "),
+            version.loaders.join(", ")
+        );
     }
 
     Ok(())
@@ -323,38 +297,16 @@ async fn get_latest_version(
     mod_name: String,
     loader: Loaders,
     game_version: Option<String>,
-) -> Result<(), reqwest::Error> {
-    let request = client
-        .get(format!(
-            "https://api.modrinth.com/v2/project/{mod_name}/version"
-        ))
-        .query(&[("loaders", format!("[\"{loader}\"]"))]);
-
-    let request = if let Some(game_version) = game_version {
-        request.query(&[("game_versions", format!("[\"{game_version}\"]"))])
+) -> Result<(), Error> {
+    let versions = get_versions(client, &mod_name, Some(loader), game_version).await?;
+    let latest = versions.first();
+    println!("Latest version for mod '{mod_name}':");
+    if let Some(latest) = latest {
+        println!("\t{} - {}", latest.name, latest.game_versions.join(", "));
     } else {
-        request
-    };
-    let res = request.send().await?;
-    if res.status().is_success() {
-        let versions: Vec<Version> = res.json().await?;
-        let latest = versions.first();
-        println!("Latest version for mod '{mod_name}':");
-        if let Some(latest) = latest {
-            println!("\t{} - {}", latest.name, latest.game_versions.join(", "));
-        } else {
-            println!("No versions found for mod '{mod_name}'");
-        }
-    } else {
-        if res.status().as_u16() == 404 {
-            println!("Mod '{mod_name}' not found");
-        } else {
-            println!(
-                "Unexpected error: {}",
-                res.status().canonical_reason().unwrap_or("Unknown error")
-            );
-        }
+        println!("No versions found for mod '{mod_name}'");
     }
+
     Ok(())
 }
 
@@ -363,33 +315,8 @@ async fn download_mod(
     mod_name: String,
     loader: Loaders,
     game_version: String,
-) -> Result<(), reqwest::Error> {
-    let request = client
-        .get(format!(
-            "https://api.modrinth.com/v2/project/{mod_name}/version"
-        ))
-        .query(&[
-            ("loaders", format!("[\"{loader}\"]")),
-            ("game_versions", format!("[\"{game_version}\"]")),
-        ]);
-
-    let res = request.send().await?;
-
-    if !res.status().is_success() {
-        if res.status().as_u16() == 404 {
-            println!("Mod '{mod_name}' not found");
-            return Ok(());
-        }
-
-        println!(
-            "Unexpected error: {}",
-            res.status().canonical_reason().unwrap_or("Unknown error")
-        );
-
-        return Ok(());
-    }
-
-    let versions: Vec<Version> = res.json().await?;
+) -> Result<(), Error> {
+    let versions = get_versions(client, &mod_name, Some(loader), Some(game_version)).await?;
     if versions.len() == 0 {
         println!("No versions found");
         return Ok(());
@@ -459,4 +386,63 @@ async fn download_mod(
     }
 
     Ok(())
+}
+
+enum Error {
+    Reqwest(reqwest::Error),
+    NotFound,
+    StatusCode(StatusCode),
+}
+
+impl From<reqwest::Error> for Error {
+    fn from(value: reqwest::Error) -> Self {
+        Self::Reqwest(value)
+    }
+}
+
+impl From<StatusCode> for Error {
+    fn from(value: StatusCode) -> Self {
+        Self::StatusCode(value)
+    }
+}
+
+impl Debug for Error {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Reqwest(arg0) => f.debug_tuple("Reqwest").field(arg0).finish(),
+            Self::NotFound => write!(f, "Mod not found"),
+            Self::StatusCode(arg0) => f.debug_tuple("StatusCode").field(arg0).finish(),
+        }
+    }
+}
+
+async fn get_versions(
+    client: &Client,
+    mod_name: &str,
+    loader: Option<Loaders>,
+    game_version: Option<String>,
+) -> Result<Vec<Version>, Error> {
+    let request = client.get(format!(
+        "https://api.modrinth.com/v2/project/{mod_name}/version"
+    ));
+    let request = if let Some(loader) = loader {
+        request.query(&[("loaders", format!("[\"{loader}\"]"))])
+    } else {
+        request
+    };
+    let request = if let Some(game_version) = game_version {
+        request.query(&[("game_versions", format!("[\"{game_version}\"]"))])
+    } else {
+        request
+    };
+    let res = request.send().await?;
+    if res.status().is_success() {
+        Ok(res.json().await?)
+    } else {
+        if res.status().as_u16() == 404 {
+            Err(Error::NotFound)
+        } else {
+            Err(res.status().into())
+        }
+    }
 }

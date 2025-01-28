@@ -16,6 +16,48 @@ static APP_USER_AGENT: &str = concat!(
     env!("CARGO_PKG_VERSION"),
 );
 
+enum Error {
+    Reqwest(reqwest::Error),
+    NotFound,
+    StatusCode(StatusCode),
+    NoVersionsFound,
+    InvalidIndex,
+    NoFilesFound,
+    Io(std::io::Error),
+}
+
+impl From<reqwest::Error> for Error {
+    fn from(value: reqwest::Error) -> Self {
+        Self::Reqwest(value)
+    }
+}
+
+impl From<StatusCode> for Error {
+    fn from(value: StatusCode) -> Self {
+        Self::StatusCode(value)
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(value: std::io::Error) -> Self {
+        Error::Io(value)
+    }
+}
+
+impl Debug for Error {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Reqwest(arg0) => f.debug_tuple("Reqwest").field(arg0).finish(),
+            Self::NotFound => write!(f, "Mod not found"),
+            Self::StatusCode(arg0) => f.debug_tuple("StatusCode").field(arg0).finish(),
+            Self::NoVersionsFound => write!(f, "No mod versions found"),
+            Self::InvalidIndex => write!(f, "Invalid index"),
+            Self::NoFilesFound => write!(f, "No files found"),
+            Self::Io(arg0) => f.debug_tuple("IO").field(arg0).finish(),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct Version {
     name: String,
@@ -318,102 +360,79 @@ async fn download_mod(
 ) -> Result<(), Error> {
     let versions = get_versions(client, &mod_name, Some(loader), Some(game_version)).await?;
     if versions.len() == 0 {
-        println!("No versions found");
-        return Ok(());
+        return Err(Error::NoVersionsFound);
     }
 
-    let mut buffer = String::new();
     let stdin = std::io::stdin();
-
-    println!("Available versions:");
-    for (i, version) in versions.iter().enumerate() {
-        println!("\t{i} - {}", version.name);
-    }
-    println!("Select version (0-{}):", versions.len() - 1);
-    stdin.read_line(&mut buffer);
-    let version_i: usize = if let Ok(version_i) = buffer.trim().parse() {
-        if version_i >= versions.len() {
-            println!("Invalid index");
-            return Ok(());
-        }
-        version_i
+    let version = if versions.len() == 1 {
+        &versions[0]
     } else {
-        println!("Please enter a number");
-        return Ok(());
+        let mut buffer = String::new();
+
+        println!("Available versions:");
+        for (i, version) in versions.iter().enumerate() {
+            println!("\t{i} - {}", version.name);
+        }
+        println!("Select version (0-{}):", versions.len() - 1);
+        stdin.read_line(&mut buffer);
+        let version_i: usize = if let Ok(version_i) = buffer.trim().parse() {
+            if version_i >= versions.len() {
+                return Err(Error::InvalidIndex);
+            }
+            version_i
+        } else {
+            return Err(Error::InvalidIndex);
+        };
+
+        &versions[version_i]
     };
 
-    let version = &versions[version_i];
+    let files = &version.files;
 
-    println!("Available files:");
-    for (i, file) in version.files.iter().enumerate() {
-        println!("\t{i} - {}", file.filename);
+    if files.len() == 0 {
+        return Err(Error::NoFilesFound);
     }
 
-    println!("Select file (0-{}):", version.files.len() - 1);
-    let mut buffer = String::new();
-    stdin.read_line(&mut buffer);
-    let file_i: usize = if let Ok(file_i) = buffer.trim().parse() {
-        if file_i >= versions.len() {
-            println!("Invalid index");
-            return Ok(());
-        }
-        file_i
+    let file = if files.len() == 1 {
+        &files[0]
     } else {
-        println!("Please enter a number");
-        return Ok(());
-    };
+        println!("Available files:");
+        for (i, file) in version.files.iter().enumerate() {
+            println!("\t{i} - {}", file.filename);
+        }
 
-    let file = &version.files[file_i];
+        println!("Select file (0-{}):", version.files.len() - 1);
+        let mut buffer = String::new();
+        stdin.read_line(&mut buffer);
+        let file_i: usize = if let Ok(file_i) = buffer.trim().parse() {
+            if file_i >= versions.len() {
+                return Err(Error::InvalidIndex);
+            }
+            file_i
+        } else {
+            return Err(Error::InvalidIndex);
+        };
+
+        &files[file_i]
+    };
 
     let request = client.get(file.url.clone());
 
+    print!("Downloading '{}'...", file.filename);
+    std::io::stdout().flush();
     let res = request.send().await?;
 
     let bytes = res.bytes().await?;
+    println!("Done");
 
-    let file = std::fs::File::create(file.filename.clone());
+    print!("Writing file '{}'...", file.filename);
+    std::io::stdout().flush();
+    let mut file = std::fs::File::create(file.filename.clone())?;
 
-    let mut file = match file {
-        Err(err) => {
-            println!("Unable to open file: {:?}", err);
-            return Ok(());
-        }
-        Ok(file) => file,
-    };
-
-    if let Err(err) = file.write(&bytes) {
-        println!("Unable to write to file: {:?}", err);
-    }
+    file.write(&bytes)?;
+    println!("Done");
 
     Ok(())
-}
-
-enum Error {
-    Reqwest(reqwest::Error),
-    NotFound,
-    StatusCode(StatusCode),
-}
-
-impl From<reqwest::Error> for Error {
-    fn from(value: reqwest::Error) -> Self {
-        Self::Reqwest(value)
-    }
-}
-
-impl From<StatusCode> for Error {
-    fn from(value: StatusCode) -> Self {
-        Self::StatusCode(value)
-    }
-}
-
-impl Debug for Error {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Reqwest(arg0) => f.debug_tuple("Reqwest").field(arg0).finish(),
-            Self::NotFound => write!(f, "Mod not found"),
-            Self::StatusCode(arg0) => f.debug_tuple("StatusCode").field(arg0).finish(),
-        }
-    }
 }
 
 async fn get_versions(

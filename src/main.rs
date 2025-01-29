@@ -1,8 +1,8 @@
 #![allow(unused)]
 
 use clap::{Parser, Subcommand, ValueEnum};
+use mod_updater::modrinth::{GameVersion, Loaders, Version};
 use mod_updater::{Config, Error};
-use modrinth::{GameVersion, Loaders, Version};
 use reqwest::{get, Client, ClientBuilder, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -11,7 +11,7 @@ use std::fs::File;
 use std::io::{prelude::*, BufReader};
 use tokio::task::JoinSet;
 
-mod modrinth;
+// pub use mod_updater::Loaders;
 
 static APP_USER_AGENT: &str = concat!(
     "FloatyJellyfish",
@@ -62,6 +62,18 @@ enum Commands {
         #[arg(short, long)]
         latest: bool,
     },
+    Pack {
+        #[command(subcommand)]
+        command: PackCommand,
+        #[arg(short, long)]
+        path: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Clone)]
+enum PackCommand {
+    Download,
+    Update,
 }
 
 #[tokio::main]
@@ -91,6 +103,20 @@ async fn main() -> Result<(), Error> {
             latest,
         } => {
             download_mod(client.clone(), mod_name, loader, game_version, latest).await?;
+        }
+        Commands::Pack { command, path } => {
+            let config = if let Some(path) = path {
+                Config::try_load(path)
+            } else {
+                Config::try_load("mods.yaml")
+            }?;
+
+            match command {
+                PackCommand::Download => {
+                    download_mods(client.clone(), config).await?;
+                }
+                PackCommand::Update => {}
+            }
         }
     }
 
@@ -202,19 +228,19 @@ async fn download_mod(
 
     let request = client.get(file.url.clone());
 
-    print!("Downloading '{}'...", file.filename);
+    let file_name = file.filename.clone();
+
+    println!("Downloading '{}'...", file_name);
     std::io::stdout().flush();
     let res = request.send().await?;
 
     let bytes = res.bytes().await?;
-    println!("Done");
 
-    print!("Writing file '{}'...", file.filename);
     std::io::stdout().flush();
-    let mut file = std::fs::File::create(file.filename.clone())?;
+    let mut file = std::fs::File::create(file_name.clone())?;
 
     file.write_all(&bytes)?;
-    println!("Done");
+    println!("Wrote file '{}'...", file_name);
 
     Ok(())
 }
@@ -311,4 +337,24 @@ async fn latest_compatible_version(
 ) -> Result<GameVersion, Error> {
     let compatible_versions = compatible_versions(client, mods, loader).await?;
     Ok(compatible_versions[0].clone())
+}
+
+async fn download_mods(client: Client, config: Config) -> Result<(), Error> {
+    let mut set = JoinSet::new();
+
+    for m in config.mods {
+        set.spawn(download_mod(
+            client.clone(),
+            m,
+            config.loader.clone(),
+            config.version.clone(),
+            true,
+        ));
+    }
+
+    while let Some(res) = set.join_next().await {
+        res??;
+    }
+
+    Ok(())
 }

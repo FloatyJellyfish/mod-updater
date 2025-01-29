@@ -6,6 +6,8 @@ use std::{
 use modrinth::Loaders;
 use serde::{Deserialize, Serialize};
 
+pub mod modrinth;
+
 pub enum Error {
     Reqwest(reqwest::Error),
     NotFound,
@@ -64,13 +66,11 @@ impl Debug for Error {
     }
 }
 
-mod modrinth;
-
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Config {
-    loader: Loaders,
-    version: String,
-    mods: Vec<String>,
+    pub loader: Loaders,
+    pub version: String,
+    pub mods: Vec<String>,
 }
 
 impl Config {

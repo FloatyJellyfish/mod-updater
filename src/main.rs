@@ -10,6 +10,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::fs::File;
 use std::io::{prelude::*, BufReader};
 use tokio;
+use tokio::task::JoinSet;
 
 mod modrinth;
 
@@ -75,14 +76,14 @@ async fn main() -> Result<(), Error> {
             loader,
             game_version,
         } => {
-            list_versions(&client, mod_name, loader, game_version).await?;
+            list_versions(client.clone(), mod_name, loader, game_version).await?;
         }
         Commands::Latest {
             mod_name,
             loader,
             game_version,
         } => {
-            get_latest_version(&client, mod_name, loader, game_version).await?;
+            get_latest_version(client.clone(), mod_name, loader, game_version).await?;
         }
         Commands::Download {
             mod_name,
@@ -90,7 +91,7 @@ async fn main() -> Result<(), Error> {
             game_version,
             latest,
         } => {
-            download_mod(&client, mod_name, loader, game_version, latest).await?;
+            download_mod(client.clone(), mod_name, loader, game_version, latest).await?;
         }
     }
 
@@ -98,12 +99,12 @@ async fn main() -> Result<(), Error> {
 }
 
 async fn list_versions(
-    client: &Client,
+    client: Client,
     mod_name: String,
     loader: Option<Loaders>,
     game_version: Option<String>,
 ) -> Result<(), Error> {
-    let versions = get_versions(client, &mod_name, loader, game_version).await?;
+    let versions = get_versions(client, mod_name.clone(), loader, game_version).await?;
     println!("Mod versions for '{mod_name}':");
     for version in versions {
         println!(
@@ -118,14 +119,14 @@ async fn list_versions(
 }
 
 async fn get_latest_version(
-    client: &Client,
+    client: Client,
     mod_name: String,
     loader: Loaders,
     game_version: Option<String>,
 ) -> Result<(), Error> {
-    let versions = get_versions(client, &mod_name, Some(loader), game_version).await?;
+    let versions = get_versions(client, mod_name.clone(), Some(loader), game_version).await?;
     let latest = versions.first();
-    println!("Latest version for mod '{mod_name}':");
+    println!("Latest version for mod '{}':", mod_name.clone());
     if let Some(latest) = latest {
         println!("\t{} - {}", latest.name, latest.game_versions.join(", "));
     } else {
@@ -136,13 +137,13 @@ async fn get_latest_version(
 }
 
 async fn download_mod(
-    client: &Client,
+    client: Client,
     mod_name: String,
     loader: Loaders,
     game_version: String,
     latest: bool,
 ) -> Result<(), Error> {
-    let versions = get_versions(client, &mod_name, Some(loader), Some(game_version)).await?;
+    let versions = get_versions(client.clone(), mod_name, Some(loader), Some(game_version)).await?;
     if versions.len() == 0 {
         return Err(Error::NoVersionsFound);
     }
@@ -220,8 +221,8 @@ async fn download_mod(
 }
 
 async fn get_versions(
-    client: &Client,
-    mod_name: &str,
+    client: Client,
+    mod_name: String,
     loader: Option<Loaders>,
     game_version: Option<String>,
 ) -> Result<Vec<Version>, Error> {
@@ -251,17 +252,31 @@ async fn get_versions(
 }
 
 async fn compatible_versions(
-    client: &Client,
-    mods: Vec<&str>,
+    client: Client,
+    mods: Vec<String>,
     loader: Loaders,
 ) -> Result<Vec<GameVersion>, Error> {
-    let mut version_support = HashMap::new();
-    for m in mods.iter() {
-        let versions = get_versions(client, m, Some(loader.clone()), None).await?;
+    let mut set = JoinSet::new();
 
+    for m in mods.iter() {
+        set.spawn(get_versions(
+            client.clone(),
+            m.clone(),
+            Some(loader.clone()),
+            None,
+        ));
+    }
+
+    let mut mods_supported_versions = Vec::new();
+    while let Some(res) = set.join_next().await {
+        mods_supported_versions.push(res??);
+    }
+
+    let mut version_support = HashMap::new();
+    for mod_supported_versions in mods_supported_versions {
         let mut max_version = "0.0.0".to_string().into();
         let mut game_versions = Vec::new();
-        for version in versions {
+        for version in mod_supported_versions {
             for game_version in version.game_versions {
                 let game_version: GameVersion = game_version.into();
                 if !game_versions.contains(&game_version) {
@@ -272,7 +287,6 @@ async fn compatible_versions(
                 }
             }
         }
-
         for version in game_versions {
             version_support
                 .entry(version)
@@ -294,8 +308,8 @@ async fn compatible_versions(
 }
 
 async fn latest_compatible_version(
-    client: &Client,
-    mods: Vec<&str>,
+    client: Client,
+    mods: Vec<String>,
     loader: Loaders,
 ) -> Result<GameVersion, Error> {
     let compatible_versions = compatible_versions(client, mods, loader).await?;

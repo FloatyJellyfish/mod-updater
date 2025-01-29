@@ -15,6 +15,7 @@ pub enum Error {
     NoFilesFound,
     Io(std::io::Error),
     Yaml(serde_yaml::Error),
+    JoinError(tokio::task::JoinError),
 }
 
 impl From<reqwest::Error> for Error {
@@ -41,6 +42,12 @@ impl From<serde_yaml::Error> for Error {
     }
 }
 
+impl From<tokio::task::JoinError> for Error {
+    fn from(value: tokio::task::JoinError) -> Self {
+        Self::JoinError(value)
+    }
+}
+
 impl Debug for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -52,6 +59,7 @@ impl Debug for Error {
             Self::NoFilesFound => write!(f, "No files found"),
             Self::Io(arg0) => f.debug_tuple("IO").field(arg0).finish(),
             Self::Yaml(arg0) => f.debug_tuple("YAML").field(arg0).finish(),
+            Self::JoinError(arg0) => f.debug_tuple("JoinError").field(arg0).finish(),
         }
     }
 }

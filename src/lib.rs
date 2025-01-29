@@ -1,4 +1,10 @@
-use std::fmt::{Debug, Formatter};
+use std::{
+    fmt::{Debug, Formatter},
+    path::Path,
+};
+
+use modrinth::Loaders;
+use serde::{Deserialize, Serialize};
 
 pub enum Error {
     Reqwest(reqwest::Error),
@@ -8,6 +14,7 @@ pub enum Error {
     InvalidIndex,
     NoFilesFound,
     Io(std::io::Error),
+    Yaml(serde_yaml::Error),
 }
 
 impl From<reqwest::Error> for Error {
@@ -24,7 +31,13 @@ impl From<reqwest::StatusCode> for Error {
 
 impl From<std::io::Error> for Error {
     fn from(value: std::io::Error) -> Self {
-        Error::Io(value)
+        Self::Io(value)
+    }
+}
+
+impl From<serde_yaml::Error> for Error {
+    fn from(value: serde_yaml::Error) -> Self {
+        Self::Yaml(value)
     }
 }
 
@@ -38,6 +51,26 @@ impl Debug for Error {
             Self::InvalidIndex => write!(f, "Invalid index"),
             Self::NoFilesFound => write!(f, "No files found"),
             Self::Io(arg0) => f.debug_tuple("IO").field(arg0).finish(),
+            Self::Yaml(arg0) => f.debug_tuple("YAML").field(arg0).finish(),
         }
+    }
+}
+
+mod modrinth;
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Config {
+    loader: Loaders,
+    version: String,
+    mods: Vec<String>,
+}
+
+impl Config {
+    pub fn try_load<P>(file_path: P) -> Result<Config, Error>
+    where
+        P: AsRef<Path>,
+    {
+        let file = std::fs::File::open(file_path)?;
+        Ok(serde_yaml::from_reader(file)?)
     }
 }

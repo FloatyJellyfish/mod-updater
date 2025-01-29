@@ -1,12 +1,13 @@
 #![allow(unused)]
 
 use clap::{Parser, Subcommand, ValueEnum};
-use mod_updater::Error;
-use modrinth::{GameVersion, Version};
+use mod_updater::{Config, Error};
+use modrinth::{GameVersion, Loaders, Version};
 use reqwest::{get, Client, ClientBuilder, StatusCode};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
+use std::fs::File;
 use std::io::{prelude::*, BufReader};
 use tokio;
 
@@ -58,28 +59,6 @@ enum Commands {
         /// Filter by game version (e.g. 1.21.4)
         game_version: String,
     },
-}
-
-#[derive(Clone, ValueEnum)]
-enum Loaders {
-    Fabric,
-    Forge,
-    NeoForge,
-    Quilt,
-    LiteLoader,
-}
-
-impl Display for Loaders {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let str = match self {
-            Loaders::Fabric => "fabric",
-            Loaders::Forge => "forge",
-            Loaders::NeoForge => "neoforge",
-            Loaders::Quilt => "quilt",
-            Loaders::LiteLoader => "liteloader",
-        };
-        write!(f, "{str}")
-    }
 }
 
 #[tokio::main]

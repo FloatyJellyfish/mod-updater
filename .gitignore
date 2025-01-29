@@ -1,2 +1,4 @@
 /target
 *~
+*.jar
+mods.yaml

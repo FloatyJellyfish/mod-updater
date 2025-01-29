@@ -58,6 +58,9 @@ enum Commands {
         loader: Loaders,
         /// Filter by game version (e.g. 1.21.4)
         game_version: String,
+        /// Download latest mod version (skip mod version selection)
+        #[arg(short, long)]
+        latest: bool,
     },
 }
 
@@ -85,8 +88,9 @@ async fn main() -> Result<(), Error> {
             mod_name,
             loader,
             game_version,
+            latest,
         } => {
-            download_mod(&client, mod_name, loader, game_version).await?;
+            download_mod(&client, mod_name, loader, game_version, latest).await?;
         }
     }
 
@@ -201,6 +205,7 @@ async fn download_mod(
     mod_name: String,
     loader: Loaders,
     game_version: String,
+    latest: bool,
 ) -> Result<(), Error> {
     let versions = get_versions(client, &mod_name, Some(loader), Some(game_version)).await?;
     if versions.len() == 0 {
@@ -208,7 +213,7 @@ async fn download_mod(
     }
 
     let stdin = std::io::stdin();
-    let version = if versions.len() == 1 {
+    let version = if versions.len() == 1 || latest {
         &versions[0]
     } else {
         let mut buffer = String::new();

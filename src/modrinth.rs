@@ -51,12 +51,12 @@ pub struct GameVersion {
 
 impl From<String> for GameVersion {
     fn from(value: String) -> Self {
-        let parts: Vec<&str> = value.split(".").collect();
+        let parts: Vec<&str> = value.split('.').collect();
         let mut major = 0;
         let mut minor = 0;
         let mut patch = 0;
 
-        if parts.len() >= 1 {
+        if !parts.is_empty() {
             major = parts[0].parse::<usize>().unwrap();
         }
 

@@ -9,7 +9,6 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::fs::File;
 use std::io::{prelude::*, BufReader};
-use tokio;
 use tokio::task::JoinSet;
 
 mod modrinth;
@@ -144,7 +143,7 @@ async fn download_mod(
     latest: bool,
 ) -> Result<(), Error> {
     let versions = get_versions(client.clone(), mod_name, Some(loader), Some(game_version)).await?;
-    if versions.len() == 0 {
+    if versions.is_empty() {
         return Err(Error::NoVersionsFound);
     }
 
@@ -174,7 +173,7 @@ async fn download_mod(
 
     let files = &version.files;
 
-    if files.len() == 0 {
+    if files.is_empty() {
         return Err(Error::NoFilesFound);
     }
 
@@ -214,7 +213,7 @@ async fn download_mod(
     std::io::stdout().flush();
     let mut file = std::fs::File::create(file.filename.clone())?;
 
-    file.write(&bytes)?;
+    file.write_all(&bytes)?;
     println!("Done");
 
     Ok(())
@@ -242,12 +241,10 @@ async fn get_versions(
     let res = request.send().await?;
     if res.status().is_success() {
         Ok(res.json().await?)
+    } else if res.status().as_u16() == 404 {
+        Err(Error::NotFound)
     } else {
-        if res.status().as_u16() == 404 {
-            Err(Error::NotFound)
-        } else {
-            Err(res.status().into())
-        }
+        Err(res.status().into())
     }
 }
 

@@ -94,71 +94,6 @@ async fn main() -> Result<(), Error> {
         }
     }
 
-    return Ok(());
-
-    let file = std::fs::File::open("./modlist.txt").unwrap();
-    let reader = BufReader::new(file);
-
-    let mut version_support = HashMap::new();
-    let lines: Vec<std::io::Result<String>> = reader.lines().collect();
-    for line in lines.iter() {
-        let line = line.as_ref().unwrap();
-        let res = client
-            .get(format!(
-                "https://api.modrinth.com/v2/project/{}/version",
-                line
-            ))
-            .send()
-            .await?;
-        if res.status().is_success() {
-            let versions: Vec<Version> = res.json().await?;
-
-            let mut max_version = "0.0.0".to_string().into();
-            let mut game_versions = Vec::new();
-            for version in versions {
-                for game_version in version.game_versions {
-                    let game_version: GameVersion = game_version.into();
-                    if !game_versions.contains(&game_version) {
-                        game_versions.push(game_version.clone());
-                    }
-                    if game_version > max_version {
-                        max_version = game_version;
-                    }
-                }
-            }
-
-            for version in game_versions {
-                version_support
-                    .entry(version)
-                    .and_modify(|count| *count += 1)
-                    .or_insert(1);
-            }
-
-            println!("{line} - max version: {max_version}");
-        } else {
-            println!("Error getting version info for '{line}'");
-        }
-    }
-    let mut compatible_versions = Vec::new();
-    for (i, (version, count)) in version_support.iter().enumerate() {
-        if *count == lines.len() {
-            compatible_versions.push(version);
-        }
-    }
-    compatible_versions.sort();
-    compatible_versions.reverse();
-    print!("Compatible version: ");
-    // print!(
-    //     "{}",
-    //     compatible_versions
-    //         .iter()
-    //         .map(|ver| ver.to_string())
-    //         .collect::<Vec<String>>()
-    //         .join(", ")
-    // );
-    println!("Max compatible version {}", compatible_versions[0]);
-    println!();
-
     Ok(())
 }
 
@@ -313,4 +248,56 @@ async fn get_versions(
             Err(res.status().into())
         }
     }
+}
+
+async fn compatible_versions(
+    client: &Client,
+    mods: Vec<&str>,
+    loader: Loaders,
+) -> Result<Vec<GameVersion>, Error> {
+    let mut version_support = HashMap::new();
+    for m in mods.iter() {
+        let versions = get_versions(client, m, Some(loader.clone()), None).await?;
+
+        let mut max_version = "0.0.0".to_string().into();
+        let mut game_versions = Vec::new();
+        for version in versions {
+            for game_version in version.game_versions {
+                let game_version: GameVersion = game_version.into();
+                if !game_versions.contains(&game_version) {
+                    game_versions.push(game_version.clone());
+                }
+                if game_version > max_version {
+                    max_version = game_version;
+                }
+            }
+        }
+
+        for version in game_versions {
+            version_support
+                .entry(version)
+                .and_modify(|count| *count += 1)
+                .or_insert(1);
+        }
+    }
+
+    let mut compatible_versions = Vec::new();
+    let mods_count = mods.len();
+    for (i, (version, count)) in version_support.iter().enumerate() {
+        if *count == mods_count {
+            compatible_versions.push(version.clone());
+        }
+    }
+    compatible_versions.sort();
+    compatible_versions.reverse();
+    Ok(compatible_versions)
+}
+
+async fn latest_compatible_version(
+    client: &Client,
+    mods: Vec<&str>,
+    loader: Loaders,
+) -> Result<GameVersion, Error> {
+    let compatible_versions = compatible_versions(client, mods, loader).await?;
+    Ok(compatible_versions[0].clone())
 }

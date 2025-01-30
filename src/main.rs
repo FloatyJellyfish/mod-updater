@@ -370,59 +370,72 @@ async fn download_mods(client: Client, config: Config) -> Result<(), Error> {
 }
 
 async fn update_mods(client: Client, config: Config) -> Result<(), Error> {
-    let mut entries: Vec<std::io::Result<DirEntry>> = std::fs::read_dir("./")?.collect();
-    let mut updates = Vec::new();
+    let mut set = JoinSet::new();
+
     for m in config.mods {
-        let versions = get_versions(
+        set.spawn(update_mod(
             client.clone(),
             m.clone(),
-            Some(config.loader.clone()),
-            Some(config.version.clone()),
-        )
-        .await?;
-
-        let mut up_to_date = false;
-        let mut exsiting = Vec::new();
-        let latest_file = &versions[0].files[0];
-        for entry in &entries {
-            if let Ok(entry) = entry {
-                if *entry.file_name() == *latest_file.filename {
-                    updates.push(format!("'{m}' is already up to date"));
-                    up_to_date = true;
-                    break;
-                }
-
-                for version in &versions[1..] {
-                    if *entry.file_name() == *version.files[0].filename {
-                        exsiting.push(version.files[0].filename.clone());
-                    }
-                }
-            } else {
-                println!("Error getting entry");
-            }
-        }
-
-        if up_to_date {
-            continue;
-        }
-
-        updates.push(format!("Updated '{m}' to '{}'", versions[0].name));
-
-        for file in exsiting {
-            println!("Removing {file}");
-            std::fs::remove_file(file)?;
-        }
-
-        download_file(
-            client.clone(),
-            latest_file.url.clone(),
-            latest_file.filename.clone(),
-        )
-        .await?;
+            config.loader.clone(),
+            config.version.clone(),
+        ));
     }
+
+    let mut updates = Vec::new();
+    while let Some(res) = set.join_next().await {
+        updates.push(res??);
+    }
+
     println!("The following updates have been completed:");
     for update in updates {
         println!("\t{update}");
     }
     Ok(())
+}
+
+async fn update_mod(
+    client: Client,
+    mod_name: String,
+    loader: Loaders,
+    game_version: String,
+) -> Result<String, Error> {
+    let mut entries = std::fs::read_dir("./")?;
+    let versions = get_versions(
+        client.clone(),
+        mod_name.clone(),
+        Some(loader),
+        Some(game_version),
+    )
+    .await?;
+
+    let mut up_to_date = false;
+    let mut exsiting = Vec::new();
+    let latest_file = &versions[0].files[0];
+    for entry in entries {
+        let entry = entry?;
+
+        if *entry.file_name() == *latest_file.filename {
+            return Ok(format!("'{mod_name}' is already up to date"));
+        }
+
+        for version in &versions[1..] {
+            if *entry.file_name() == *version.files[0].filename {
+                exsiting.push(version.files[0].filename.clone());
+            }
+        }
+    }
+
+    for file in exsiting {
+        println!("Removing {file}");
+        std::fs::remove_file(file)?;
+    }
+
+    download_file(
+        client.clone(),
+        latest_file.url.clone(),
+        latest_file.filename.clone(),
+    )
+    .await?;
+
+    Ok(format!("Updated '{mod_name}' to '{}'", versions[0].name))
 }

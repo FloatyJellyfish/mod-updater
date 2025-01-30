@@ -1,0 +1,36 @@
+{
+  // Use IntelliSense to learn about possible attributes.
+  // Hover to view descriptions of existing attributes.
+  // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug executable 'mod-updater' pack update",
+      "cargo": {
+        "args": ["build", "--bin=mod-updater", "--package=mod-updater"],
+        "filter": {
+          "name": "mod-updater",
+          "kind": "bin"
+        }
+      },
+      "args": ["pack", "update"],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug executable 'mod-updater'",
+      "cargo": {
+        "args": ["build", "--bin=mod-updater", "--package=mod-updater"],
+        "filter": {
+          "name": "mod-updater",
+          "kind": "bin"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}

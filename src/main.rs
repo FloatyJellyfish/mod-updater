@@ -7,7 +7,7 @@ use reqwest::{get, Client, ClientBuilder, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
-use std::fs::File;
+use std::fs::{DirEntry, File};
 use std::io::{prelude::*, BufReader};
 use tokio::task::JoinSet;
 
@@ -51,6 +51,7 @@ enum Commands {
         /// Filter by game version (e.g. 1.21.4)
         game_version: Option<String>,
     },
+    /// Download mod given a loader and game version
     Download {
         /// Mod slug or id
         mod_name: String,
@@ -62,6 +63,7 @@ enum Commands {
         #[arg(short, long)]
         latest: bool,
     },
+    /// Operate on a mod pack specified in 'mods.yaml'
     Pack {
         #[command(subcommand)]
         command: PackCommand,
@@ -72,7 +74,9 @@ enum Commands {
 
 #[derive(Subcommand, Clone)]
 enum PackCommand {
+    /// Download the latest version of all mods in pack
     Download,
+    /// Update mods to their latest versions
     Update,
 }
 
@@ -115,7 +119,9 @@ async fn main() -> Result<(), Error> {
                 PackCommand::Download => {
                     download_mods(client.clone(), config).await?;
                 }
-                PackCommand::Update => {}
+                PackCommand::Update => {
+                    update_mods(client.clone(), config).await?;
+                }
             }
         }
     }
@@ -226,21 +232,25 @@ async fn download_mod(
         &files[file_i]
     };
 
-    let request = client.get(file.url.clone());
+    download_file(client.clone(), file.url.clone(), file.filename.clone()).await?;
 
-    let file_name = file.filename.clone();
+    Ok(())
+}
 
-    println!("Downloading '{}'...", file_name);
+async fn download_file(client: Client, url: String, path: String) -> Result<(), Error> {
+    let request = client.get(url);
+
+    println!("Downloading '{}'...", path);
     std::io::stdout().flush();
     let res = request.send().await?;
 
     let bytes = res.bytes().await?;
 
     std::io::stdout().flush();
-    let mut file = std::fs::File::create(file_name.clone())?;
+    let mut file = std::fs::File::create(path.clone())?;
 
     file.write_all(&bytes)?;
-    println!("Wrote file '{}'...", file_name);
+    println!("Wrote file '{}'...", path);
 
     Ok(())
 }
@@ -356,5 +366,63 @@ async fn download_mods(client: Client, config: Config) -> Result<(), Error> {
         res??;
     }
 
+    Ok(())
+}
+
+async fn update_mods(client: Client, config: Config) -> Result<(), Error> {
+    let mut entries: Vec<std::io::Result<DirEntry>> = std::fs::read_dir("./")?.collect();
+    let mut updates = Vec::new();
+    for m in config.mods {
+        let versions = get_versions(
+            client.clone(),
+            m.clone(),
+            Some(config.loader.clone()),
+            Some(config.version.clone()),
+        )
+        .await?;
+
+        let mut up_to_date = false;
+        let mut exsiting = Vec::new();
+        let latest_file = &versions[0].files[0];
+        for entry in &entries {
+            if let Ok(entry) = entry {
+                if *entry.file_name() == *latest_file.filename {
+                    updates.push(format!("'{m}' is already up to date"));
+                    up_to_date = true;
+                    break;
+                }
+
+                for version in &versions[1..] {
+                    if *entry.file_name() == *version.files[0].filename {
+                        exsiting.push(version.files[0].filename.clone());
+                    }
+                }
+            } else {
+                println!("Error getting entry");
+            }
+        }
+
+        if up_to_date {
+            continue;
+        }
+
+        updates.push(format!("Updated '{m}' to '{}'", versions[0].name));
+
+        for file in exsiting {
+            println!("Removing {file}");
+            std::fs::remove_file(file)?;
+        }
+
+        download_file(
+            client.clone(),
+            latest_file.url.clone(),
+            latest_file.filename.clone(),
+        )
+        .await?;
+    }
+    println!("The following updates have been completed:");
+    for update in updates {
+        println!("\t{update}");
+    }
     Ok(())
 }

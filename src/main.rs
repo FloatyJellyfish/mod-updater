@@ -7,9 +7,10 @@ use reqwest::{get, Client, ClientBuilder, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
-use std::fs::{DirEntry, File};
-use std::io::{prelude::*, BufReader};
-use tokio::task::JoinSet;
+use std::io::{prelude::*, stdin};
+use tokio::fs::{read_dir, remove_file};
+use tokio::io::{stdout, AsyncWriteExt};
+use tokio::task::{spawn_blocking, JoinSet};
 
 // pub use mod_updater::Loaders;
 
@@ -110,9 +111,9 @@ async fn main() -> Result<(), Error> {
         }
         Commands::Pack { command, path } => {
             let config = if let Some(path) = path {
-                Config::try_load(path)
+                Config::try_load(path).await
             } else {
-                Config::try_load("mods.yaml")
+                Config::try_load("mods.yaml").await
             }?;
 
             match command {
@@ -179,18 +180,21 @@ async fn download_mod(
         return Err(Error::NoVersionsFound);
     }
 
-    let stdin = std::io::stdin();
     let version = if versions.len() == 1 || latest {
         &versions[0]
     } else {
-        let mut buffer = String::new();
-
         println!("Available versions:");
         for (i, version) in versions.iter().enumerate() {
             println!("\t{i} - {}", version.name);
         }
         println!("Select version (0-{}):", versions.len() - 1);
-        stdin.read_line(&mut buffer);
+        let buffer = spawn_blocking(move || {
+            let mut buffer = String::new();
+            stdin().read_line(&mut buffer);
+            buffer
+        })
+        .await?;
+
         let version_i: usize = if let Ok(version_i) = buffer.trim().parse() {
             if version_i >= versions.len() {
                 return Err(Error::InvalidIndex);
@@ -218,8 +222,12 @@ async fn download_mod(
         }
 
         println!("Select file (0-{}):", version.files.len() - 1);
-        let mut buffer = String::new();
-        stdin.read_line(&mut buffer);
+        let buffer = spawn_blocking(move || {
+            let mut buffer = String::new();
+            stdin().read_line(&mut buffer);
+            buffer
+        })
+        .await?;
         let file_i: usize = if let Ok(file_i) = buffer.trim().parse() {
             if file_i >= versions.len() {
                 return Err(Error::InvalidIndex);
@@ -241,15 +249,15 @@ async fn download_file(client: Client, url: String, path: String) -> Result<(), 
     let request = client.get(url);
 
     println!("Downloading '{}'...", path);
-    std::io::stdout().flush();
+    stdout().flush().await?;
     let res = request.send().await?;
 
     let bytes = res.bytes().await?;
 
-    std::io::stdout().flush();
-    let mut file = std::fs::File::create(path.clone())?;
+    stdout().flush().await?;
+    let mut file = tokio::fs::File::create(path.clone()).await?;
 
-    file.write_all(&bytes)?;
+    file.write_all(&bytes).await?;
     println!("Wrote file '{}'...", path);
 
     Ok(())
@@ -399,7 +407,7 @@ async fn update_mod(
     loader: Loaders,
     game_version: String,
 ) -> Result<String, Error> {
-    let mut entries = std::fs::read_dir("./")?;
+    let mut entries = read_dir("./").await?;
     let versions = get_versions(
         client.clone(),
         mod_name.clone(),
@@ -411,9 +419,7 @@ async fn update_mod(
     let mut up_to_date = false;
     let mut exsiting = Vec::new();
     let latest_file = &versions[0].files[0];
-    for entry in entries {
-        let entry = entry?;
-
+    while let Some(entry) = entries.next_entry().await? {
         if *entry.file_name() == *latest_file.filename {
             return Ok(format!("'{mod_name}' is already up to date"));
         }
@@ -427,7 +433,7 @@ async fn update_mod(
 
     for file in exsiting {
         println!("Removing {file}");
-        std::fs::remove_file(file)?;
+        remove_file(file).await?;
     }
 
     download_file(

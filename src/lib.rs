@@ -5,6 +5,7 @@ use std::{
 
 use modrinth::Loaders;
 use serde::{Deserialize, Serialize};
+use tokio::io::AsyncReadExt;
 
 pub mod modrinth;
 
@@ -74,11 +75,13 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn try_load<P>(file_path: P) -> Result<Config, Error>
+    pub async fn try_load<P>(file_path: P) -> Result<Config, Error>
     where
         P: AsRef<Path>,
     {
-        let file = std::fs::File::open(file_path)?;
-        Ok(serde_yaml::from_reader(file)?)
+        let mut file = tokio::fs::File::open(file_path).await?;
+        let mut contents = String::new();
+        file.read_to_string(&mut contents).await?;
+        Ok(serde_yaml::from_str(&contents)?)
     }
 }

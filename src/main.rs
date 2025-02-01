@@ -79,6 +79,8 @@ enum PackCommand {
     Download,
     /// Update mods to their latest versions
     Update,
+    /// Check for compatible game versions and update all mods to selected version
+    Upgrade,
 }
 
 #[tokio::main]
@@ -122,6 +124,9 @@ async fn main() -> Result<(), Error> {
                 }
                 PackCommand::Update => {
                     update_mods(client.clone(), config).await?;
+                }
+                PackCommand::Upgrade => {
+                    upgrade_mods(client.clone(), config).await?;
                 }
             }
         }
@@ -444,4 +449,45 @@ async fn update_mod(
     .await?;
 
     Ok(format!("Updated '{mod_name}' to '{}'", versions[0].name))
+}
+
+async fn upgrade_mods(client: Client, config: Config) -> Result<(), Error> {
+    let current_version = GameVersion::from(config.version);
+    let compatible_versions =
+        compatible_versions(client.clone(), config.mods, config.loader).await?;
+
+    let compatible_versions: Vec<GameVersion> = compatible_versions
+        .into_iter()
+        .filter(|ver| ver > &current_version)
+        .collect();
+
+    if compatible_versions.is_empty() {
+        println!("No compatible versions available to upgrade to");
+        return Ok(());
+    }
+
+    println!("Compatible versions:");
+    for (i, version) in compatible_versions.iter().enumerate() {
+        println!("\t{i} - {version}");
+    }
+
+    println!("Select file (0-{}):", compatible_versions.len() - 1);
+    let buffer = spawn_blocking(move || {
+        let mut buffer = String::new();
+        stdin().read_line(&mut buffer);
+        buffer
+    })
+    .await?;
+    let i: usize = if let Ok(i) = buffer.trim().parse() {
+        if i >= compatible_versions.len() {
+            return Err(Error::InvalidIndex);
+        }
+        i
+    } else {
+        return Err(Error::InvalidIndex);
+    };
+
+    let version = &compatible_versions[i];
+
+    Ok(())
 }

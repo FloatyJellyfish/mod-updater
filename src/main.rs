@@ -83,6 +83,11 @@ enum PackCommand {
     Update,
     /// Check for compatible game versions and update all mods to selected version
     Upgrade,
+    /// Create modpack definition
+    Init {
+        loader: Loaders,
+        game_version: String,
+    },
 }
 
 #[tokio::main]
@@ -113,25 +118,38 @@ async fn main() -> Result<(), Error> {
         } => {
             download_mod(client.clone(), mod_name, loader, game_version, latest).await?;
         }
-        Commands::Pack { command, path } => {
-            let config = if let Some(path) = path {
-                Config::try_load(path).await
-            } else {
-                Config::try_load("mods.yaml").await
-            }?;
-
-            match command {
-                PackCommand::Download => {
-                    download_mods(client.clone(), config).await?;
-                }
-                PackCommand::Update => {
-                    update_mods(client.clone(), config).await?;
-                }
-                PackCommand::Upgrade => {
-                    upgrade_mods(client.clone(), config).await?;
-                }
+        Commands::Pack { command, path } => match command {
+            PackCommand::Download => {
+                let config = if let Some(path) = path {
+                    Config::try_load(path).await
+                } else {
+                    Config::try_load("mods.yaml").await
+                }?;
+                download_mods(client.clone(), config).await?;
             }
-        }
+            PackCommand::Update => {
+                let config = if let Some(path) = path {
+                    Config::try_load(path).await
+                } else {
+                    Config::try_load("mods.yaml").await
+                }?;
+                update_mods(client.clone(), config).await?;
+            }
+            PackCommand::Upgrade => {
+                let config = if let Some(path) = path {
+                    Config::try_load(path).await
+                } else {
+                    Config::try_load("mods.yaml").await
+                }?;
+                upgrade_mods(client.clone(), config).await?;
+            }
+            PackCommand::Init {
+                loader,
+                game_version,
+            } => {
+                pack_init(client.clone(), loader, game_version).await?;
+            }
+        },
     }
 
     Ok(())
@@ -545,4 +563,17 @@ async fn get_game_versions(client: Client) -> Result<Vec<GameVersion>, Error> {
     } else {
         Err(Error::StatusCode(res.status()))
     }
+}
+
+async fn pack_init(client: Client, loader: Loaders, game_version: String) -> Result<(), Error> {
+    let config = Config {
+        loader,
+        version: game_version,
+        mods: Vec::new(),
+    };
+    let contents = serde_yaml::to_string(&config)?;
+    let mut file = File::create("mods.yaml").await?;
+    file.write_all(contents.as_bytes()).await?;
+    println!("Created pack config 'mods.yaml'");
+    Ok(())
 }

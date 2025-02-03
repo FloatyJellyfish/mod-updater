@@ -2,6 +2,7 @@ use std::fmt::{Display, Formatter};
 
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 #[derive(Debug, Deserialize)]
 pub struct Version {
@@ -42,58 +43,6 @@ pub struct File {
     pub file_type: Option<String>,
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct GameVersion {
-    pub major: usize,
-    pub minor: usize,
-    pub patch: usize,
-}
-
-impl From<String> for GameVersion {
-    fn from(value: String) -> Self {
-        let parts: Vec<&str> = value.split('.').collect();
-        let mut major = 0;
-        let mut minor = 0;
-        let mut patch = 0;
-
-        if !parts.is_empty() {
-            major = parts[0].parse::<usize>().unwrap();
-        }
-
-        if parts.len() >= 2 {
-            minor = parts[1].parse::<usize>().unwrap();
-        }
-
-        if parts.len() >= 3 {
-            patch = parts[2].parse::<usize>().unwrap();
-        }
-
-        Self {
-            major,
-            minor,
-            patch,
-        }
-    }
-}
-
-impl Display for GameVersion {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
-        if self.patch != 0 {
-            write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
-        } else if self.minor != 0 {
-            write!(f, "{}.{}", self.major, self.minor)
-        } else {
-            write!(f, "{}", self.major)
-        }
-    }
-}
-
-impl std::fmt::Debug for GameVersion {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
-        std::fmt::Display::fmt(&self, f)
-    }
-}
-
 #[derive(Debug, Deserialize)]
 pub struct Hash {
     pub sha512: String,
@@ -120,5 +69,37 @@ impl Display for Loaders {
             Loaders::LiteLoader => "liteloader",
         };
         write!(f, "{str}")
+    }
+}
+
+#[derive(Deserialize, Hash, Clone)]
+#[serde(rename_all = "lowercase")]
+pub enum VersionType {
+    Release,
+    Snapshot,
+    Alpha,
+    Beta,
+}
+
+#[derive(Deserialize, Hash, Clone)]
+pub struct GameVersion {
+    pub version: String,
+    pub version_type: VersionType,
+    #[serde(with = "time::serde::iso8601")]
+    pub date: OffsetDateTime,
+    pub major: bool,
+}
+
+impl PartialEq for GameVersion {
+    fn eq(&self, other: &Self) -> bool {
+        self.version == other.version
+    }
+}
+
+impl Eq for GameVersion {}
+
+impl Display for GameVersion {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.version)
     }
 }

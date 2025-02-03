@@ -19,6 +19,7 @@ pub enum Error {
     Io(std::io::Error),
     Yaml(serde_yaml::Error),
     JoinError(tokio::task::JoinError),
+    NoGameVersions,
 }
 
 impl From<reqwest::Error> for Error {
@@ -63,11 +64,12 @@ impl Debug for Error {
             Self::Io(arg0) => f.debug_tuple("IO").field(arg0).finish(),
             Self::Yaml(arg0) => f.debug_tuple("YAML").field(arg0).finish(),
             Self::JoinError(arg0) => f.debug_tuple("JoinError").field(arg0).finish(),
+            Self::NoGameVersions => write!(f, "Failed to get game versions"),
         }
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Config {
     pub loader: Loaders,
     pub version: String,

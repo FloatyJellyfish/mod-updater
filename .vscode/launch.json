@@ -21,6 +21,20 @@
     {
       "type": "lldb",
       "request": "launch",
+      "name": "Debug executable 'mod-updater' pack upgrade",
+      "cargo": {
+        "args": ["build", "--bin=mod-updater", "--package=mod-updater"],
+        "filter": {
+          "name": "mod-updater",
+          "kind": "bin"
+        }
+      },
+      "args": ["pack", "upgrade"],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
       "name": "Debug executable 'mod-updater'",
       "cargo": {
         "args": ["build", "--bin=mod-updater", "--package=mod-updater"],

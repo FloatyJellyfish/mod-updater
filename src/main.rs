@@ -7,8 +7,10 @@ use reqwest::{get, Client, ClientBuilder, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
+use std::fs::FileType;
 use std::io::{prelude::*, stdin};
-use tokio::fs::{read_dir, remove_file};
+use std::ops::Deref;
+use tokio::fs::{copy, create_dir, read_dir, remove_file, try_exists, write, File};
 use tokio::io::{stdout, AsyncWriteExt};
 use tokio::task::{spawn_blocking, JoinSet};
 
@@ -302,6 +304,8 @@ async fn compatible_versions(
     mods: Vec<String>,
     loader: Loaders,
 ) -> Result<Vec<GameVersion>, Error> {
+    let game_versions = get_game_versions(client.clone()).await?;
+
     let mut set = JoinSet::new();
 
     for m in mods.iter() {
@@ -320,20 +324,19 @@ async fn compatible_versions(
 
     let mut version_support = HashMap::new();
     for mod_supported_versions in mods_supported_versions {
-        let mut max_version = "0.0.0".to_string().into();
-        let mut game_versions = Vec::new();
+        let mut versions = Vec::new();
         for version in mod_supported_versions {
             for game_version in version.game_versions {
-                let game_version: GameVersion = game_version.into();
-                if !game_versions.contains(&game_version) {
-                    game_versions.push(game_version.clone());
-                }
-                if game_version > max_version {
-                    max_version = game_version;
+                let game_version = game_versions
+                    .iter()
+                    .find(|x| x.version == game_version)
+                    .expect("Invalid game version");
+                if !versions.contains(game_version) {
+                    versions.push(game_version.clone());
                 }
             }
         }
-        for version in game_versions {
+        for version in versions {
             version_support
                 .entry(version)
                 .and_modify(|count| *count += 1)
@@ -345,10 +348,10 @@ async fn compatible_versions(
     let mods_count = mods.len();
     for (i, (version, count)) in version_support.iter().enumerate() {
         if *count == mods_count {
-            compatible_versions.push(version.clone());
+            compatible_versions.push((*version).clone());
         }
     }
-    compatible_versions.sort();
+    compatible_versions.sort_by(|a, b| a.date.cmp(&b.date));
     compatible_versions.reverse();
     Ok(compatible_versions)
 }
@@ -452,13 +455,25 @@ async fn update_mod(
 }
 
 async fn upgrade_mods(client: Client, config: Config) -> Result<(), Error> {
-    let current_version = GameVersion::from(config.version);
+    let game_versions = get_game_versions(client.clone()).await?;
+
+    let current_version = config.version;
+    let current_version_index = game_versions
+        .iter()
+        .position(|x| x.version == current_version)
+        .expect("Invalid game version");
     let compatible_versions =
-        compatible_versions(client.clone(), config.mods, config.loader).await?;
+        compatible_versions(client.clone(), config.mods.clone(), config.loader.clone()).await?;
 
     let compatible_versions: Vec<GameVersion> = compatible_versions
         .into_iter()
-        .filter(|ver| ver > &current_version)
+        .filter(|ver| {
+            game_versions
+                .iter()
+                .position(|x| x == ver)
+                .expect("Invalid game version")
+                < current_version_index
+        })
         .collect();
 
     if compatible_versions.is_empty() {
@@ -466,12 +481,12 @@ async fn upgrade_mods(client: Client, config: Config) -> Result<(), Error> {
         return Ok(());
     }
 
-    println!("Compatible versions:");
+    println!("Compatible game versions:");
     for (i, version) in compatible_versions.iter().enumerate() {
         println!("\t{i} - {version}");
     }
 
-    println!("Select file (0-{}):", compatible_versions.len() - 1);
+    println!("Select game version (0-{}):", compatible_versions.len() - 1);
     let buffer = spawn_blocking(move || {
         let mut buffer = String::new();
         stdin().read_line(&mut buffer);
@@ -489,5 +504,45 @@ async fn upgrade_mods(client: Client, config: Config) -> Result<(), Error> {
 
     let version = &compatible_versions[i];
 
+    // Move all .jar files to 'old' directory
+    if !try_exists("./old/").await? {
+        create_dir("./old/").await?;
+    }
+    let mut dir = read_dir("./").await?;
+    while let Some(entry) = dir.next_entry().await? {
+        if entry.file_type().await?.is_file()
+            && entry.file_name().into_string().unwrap().ends_with(".jar")
+        {
+            copy(
+                entry.path(),
+                format!("./old/{}", entry.file_name().into_string().unwrap()),
+            )
+            .await?;
+            remove_file(entry.path()).await?;
+        }
+    }
+
+    let new_config = Config {
+        loader: config.loader,
+        version: version.to_string(),
+        mods: config.mods,
+    };
+
+    download_mods(client.clone(), new_config.clone()).await?;
+
+    let config_contents = serde_yaml::to_string(&new_config)?;
+    write("mods.yaml", config_contents).await?;
+
     Ok(())
+}
+
+async fn get_game_versions(client: Client) -> Result<Vec<GameVersion>, Error> {
+    let request = client.get("https://api.modrinth.com/v2/tag/game_version");
+    let res = request.send().await?;
+
+    if res.status().is_success() {
+        Ok(res.json().await?)
+    } else {
+        Err(Error::StatusCode(res.status()))
+    }
 }

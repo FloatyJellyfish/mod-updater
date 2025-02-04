@@ -1,7 +1,7 @@
 #![allow(unused)]
 
 use clap::{Parser, Subcommand, ValueEnum};
-use mod_updater::modrinth::{GameVersion, Loaders, Version};
+use mod_updater::modrinth::{GameVersion, Loaders, SearchResult, Version};
 use mod_updater::{Config, Error};
 use reqwest::{get, Client, ClientBuilder, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -88,6 +88,8 @@ enum PackCommand {
         loader: Loaders,
         game_version: String,
     },
+    /// Add mod to modpack
+    Add { mod_name: String },
 }
 
 #[tokio::main]
@@ -148,6 +150,14 @@ async fn main() -> Result<(), Error> {
                 game_version,
             } => {
                 pack_init(client.clone(), loader, game_version).await?;
+            }
+            PackCommand::Add { mod_name } => {
+                let config = if let Some(path) = path {
+                    Config::try_load(path).await
+                } else {
+                    Config::try_load("mods.yaml").await
+                }?;
+                add_mod(client.clone(), config, mod_name).await?;
             }
         },
     }
@@ -571,9 +581,71 @@ async fn pack_init(client: Client, loader: Loaders, game_version: String) -> Res
         version: game_version,
         mods: Vec::new(),
     };
-    let contents = serde_yaml::to_string(&config)?;
-    let mut file = File::create("mods.yaml").await?;
-    file.write_all(contents.as_bytes()).await?;
+    config.try_save("mods.yaml").await?;
     println!("Created pack config 'mods.yaml'");
+    Ok(())
+}
+
+async fn add_mod(client: Client, mut config: Config, mod_name: String) -> Result<(), Error> {
+    let request = client.get("https://api.modrinth.com/v2/search").query(&[
+        ("query", mod_name.as_str()),
+        (
+            "facets",
+            format!(
+                "[[\"project_type:mod\"], [\"versions:{}\"], [\"categories:{}\"]]",
+                config.version, config.loader
+            )
+            .as_str(),
+        ),
+        ("limit", "5"),
+    ]);
+    let res = request.send().await?;
+    let mod_slug = if res.status().is_success() {
+        let search_result: SearchResult = res.json().await?;
+        if search_result.hits.is_empty() {
+            return Err(Error::NotFound);
+        } else if search_result.hits.len() == 1 {
+            search_result.hits[0].slug.clone()
+        } else {
+            for (i, hit) in search_result.hits.iter().enumerate() {
+                println!("\t{i} - {}: {}", hit.title, hit.description);
+            }
+
+            println!("Select mod (0-{}):", search_result.hits.len() - 1);
+            let buffer = spawn_blocking(move || {
+                let mut buffer = String::new();
+                stdin().read_line(&mut buffer);
+                buffer
+            })
+            .await?;
+            let i: usize = if let Ok(i) = buffer.trim().parse() {
+                if i >= search_result.hits.len() {
+                    return Err(Error::InvalidIndex);
+                }
+                i
+            } else {
+                return Err(Error::InvalidIndex);
+            };
+            search_result.hits[i].slug.clone()
+        }
+    } else if res.status().as_u16() == 400 {
+        println!("Invalid request");
+        println!("{}", res.text().await?);
+        return Err(Error::InvalidRequest);
+    } else {
+        return Err(res.status().into());
+    };
+
+    download_mod(
+        client.clone(),
+        mod_slug.clone(),
+        config.loader.clone(),
+        config.version.clone(),
+        true,
+    )
+    .await?;
+    config.mods.push(mod_slug.clone());
+    config.try_save("mods.yaml").await?;
+    println!("'{mod_slug}' added");
     Ok(())
 }

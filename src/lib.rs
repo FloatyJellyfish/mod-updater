@@ -5,7 +5,10 @@ use std::{
 
 use modrinth::Loaders;
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncReadExt;
+use tokio::{
+    fs::File,
+    io::{AsyncReadExt, AsyncWriteExt},
+};
 
 pub mod modrinth;
 
@@ -20,6 +23,7 @@ pub enum Error {
     Yaml(serde_yaml::Error),
     JoinError(tokio::task::JoinError),
     NoGameVersions,
+    InvalidRequest,
 }
 
 impl From<reqwest::Error> for Error {
@@ -65,6 +69,7 @@ impl Debug for Error {
             Self::Yaml(arg0) => f.debug_tuple("YAML").field(arg0).finish(),
             Self::JoinError(arg0) => f.debug_tuple("JoinError").field(arg0).finish(),
             Self::NoGameVersions => write!(f, "Failed to get game versions"),
+            Self::InvalidRequest => write!(f, "Invalid request"),
         }
     }
 }
@@ -85,5 +90,15 @@ impl Config {
         let mut contents = String::new();
         file.read_to_string(&mut contents).await?;
         Ok(serde_yaml::from_str(&contents)?)
+    }
+
+    pub async fn try_save<P>(&self, file_path: P) -> Result<(), Error>
+    where
+        P: AsRef<Path>,
+    {
+        let contents = serde_yaml::to_string(&self)?;
+        let mut file = File::create(file_path).await?;
+        file.write_all(contents.as_bytes()).await?;
+        Ok(())
     }
 }

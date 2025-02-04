@@ -103,3 +103,29 @@ impl Display for GameVersion {
         write!(f, "{}", self.version)
     }
 }
+
+#[derive(Deserialize)]
+pub struct SearchResult {
+    pub hits: Vec<Hit>,
+    pub offset: u32,
+    pub limit: u32,
+    pub total_hits: u32,
+}
+
+#[derive(Deserialize)]
+pub struct Hit {
+    pub title: String,
+    pub description: String,
+    pub slug: String,
+    pub project_id: String,
+    pub author: String,
+    pub display_categories: Vec<String>,
+    pub versions: Vec<String>,
+    pub follows: u32,
+    pub date_created: String,
+    pub date_modified: String,
+    pub latest_version: String,
+    pub license: String,
+    pub gallery: Vec<String>,
+    pub featured_gallery: Option<String>,
+}

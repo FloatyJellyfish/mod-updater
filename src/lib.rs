@@ -1,7 +1,4 @@
-use std::{
-    fmt::{Debug, Formatter},
-    path::Path,
-};
+use std::fmt::{Debug, Formatter};
 
 use modrinth::Loaders;
 use serde::{Deserialize, Serialize};
@@ -82,23 +79,31 @@ pub struct Config {
 }
 
 impl Config {
-    pub async fn try_load<P>(file_path: P) -> Result<Config, Error>
-    where
-        P: AsRef<Path>,
-    {
-        let mut file = tokio::fs::File::open(file_path).await?;
+    const CONFIG_PATH: &str = "mods.yaml";
+
+    pub async fn try_load() -> Result<Config, Error> {
+        let mut file = tokio::fs::File::open(Self::CONFIG_PATH).await?;
         let mut contents = String::new();
         file.read_to_string(&mut contents).await?;
         Ok(serde_yaml::from_str(&contents)?)
     }
 
-    pub async fn try_save<P>(&self, file_path: P) -> Result<(), Error>
-    where
-        P: AsRef<Path>,
-    {
+    pub async fn try_save(&self) -> Result<(), Error> {
         let contents = serde_yaml::to_string(&self)?;
-        let mut file = File::create(file_path).await?;
+        let mut file = File::create(Self::CONFIG_PATH).await?;
         file.write_all(contents.as_bytes()).await?;
         Ok(())
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct InstalledMod {
+    pub slug: String,
+    pub version: String,
+    pub file: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct InstalledConfig {
+    pub installed: Vec<InstalledMod>,
 }

@@ -16,6 +16,8 @@ use tokio::task::{spawn_blocking, JoinSet};
 
 // pub use mod_updater::Loaders;
 
+const INSTALLED_MODS_PATH: &str = "installed.yaml";
+
 static APP_USER_AGENT: &str = concat!(
     "FloatyJellyfish",
     "/",
@@ -70,8 +72,6 @@ enum Commands {
     Pack {
         #[command(subcommand)]
         command: PackCommand,
-        #[arg(short, long)]
-        path: Option<String>,
     },
 }
 
@@ -120,30 +120,15 @@ async fn main() -> Result<(), Error> {
         } => {
             download_mod(client.clone(), mod_name, loader, game_version, latest).await?;
         }
-        Commands::Pack { command, path } => match command {
+        Commands::Pack { command } => match command {
             PackCommand::Download => {
-                let config = if let Some(path) = path {
-                    Config::try_load(path).await
-                } else {
-                    Config::try_load("mods.yaml").await
-                }?;
-                download_mods(client.clone(), config).await?;
+                download_mods(client.clone(), Config::try_load().await?).await?;
             }
             PackCommand::Update => {
-                let config = if let Some(path) = path {
-                    Config::try_load(path).await
-                } else {
-                    Config::try_load("mods.yaml").await
-                }?;
-                update_mods(client.clone(), config).await?;
+                update_mods(client.clone(), Config::try_load().await?).await?;
             }
             PackCommand::Upgrade => {
-                let config = if let Some(path) = path {
-                    Config::try_load(path).await
-                } else {
-                    Config::try_load("mods.yaml").await
-                }?;
-                upgrade_mods(client.clone(), config).await?;
+                upgrade_mods(client.clone(), Config::try_load().await?).await?;
             }
             PackCommand::Init {
                 loader,
@@ -152,12 +137,7 @@ async fn main() -> Result<(), Error> {
                 pack_init(client.clone(), loader, game_version).await?;
             }
             PackCommand::Add { mod_name } => {
-                let config = if let Some(path) = path {
-                    Config::try_load(path).await
-                } else {
-                    Config::try_load("mods.yaml").await
-                }?;
-                add_mod(client.clone(), config, mod_name).await?;
+                add_mod(client.clone(), Config::try_load().await?, mod_name).await?;
             }
         },
     }
@@ -551,15 +531,13 @@ async fn upgrade_mods(client: Client, config: Config) -> Result<(), Error> {
     }
 
     let new_config = Config {
-        loader: config.loader,
         version: version.to_string(),
-        mods: config.mods,
+        ..config
     };
 
     download_mods(client.clone(), new_config.clone()).await?;
 
-    let config_contents = serde_yaml::to_string(&new_config)?;
-    write("mods.yaml", config_contents).await?;
+    new_config.try_save().await?;
 
     Ok(())
 }
@@ -581,7 +559,7 @@ async fn pack_init(client: Client, loader: Loaders, game_version: String) -> Res
         version: game_version,
         mods: Vec::new(),
     };
-    config.try_save("mods.yaml").await?;
+    config.try_save().await?;
     println!("Created pack config 'mods.yaml'");
     Ok(())
 }
@@ -645,7 +623,7 @@ async fn add_mod(client: Client, mut config: Config, mod_name: String) -> Result
     )
     .await?;
     config.mods.push(mod_slug.clone());
-    config.try_save("mods.yaml").await?;
+    config.try_save().await?;
     println!("'{mod_slug}' added");
     Ok(())
 }

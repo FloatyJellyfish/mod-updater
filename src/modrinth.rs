@@ -81,7 +81,7 @@ pub enum VersionType {
     Beta,
 }
 
-#[derive(Deserialize, Hash, Clone)]
+#[derive(Deserialize, Clone)]
 pub struct GameVersion {
     pub version: String,
     pub version_type: VersionType,
@@ -93,6 +93,12 @@ pub struct GameVersion {
 impl PartialEq for GameVersion {
     fn eq(&self, other: &Self) -> bool {
         self.version == other.version
+    }
+}
+
+impl std::hash::Hash for GameVersion {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.version.hash(state);
     }
 }
 

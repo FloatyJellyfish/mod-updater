@@ -1,4 +1,8 @@
-use std::fmt::{Debug, Formatter};
+use std::{
+    collections::BTreeMap,
+    fmt::{Debug, Formatter},
+    io::ErrorKind,
+};
 
 use modrinth::Loaders;
 use serde::{Deserialize, Serialize};
@@ -82,13 +86,23 @@ impl Config {
     const CONFIG_PATH: &str = "mods.yaml";
 
     pub async fn try_load() -> Result<Config, Error> {
-        let mut file = tokio::fs::File::open(Self::CONFIG_PATH).await?;
-        let mut contents = String::new();
-        file.read_to_string(&mut contents).await?;
-        Ok(serde_yaml::from_str(&contents)?)
+        match tokio::fs::File::open(Self::CONFIG_PATH).await {
+            Ok(mut file) => {
+                let mut contents = String::new();
+                file.read_to_string(&mut contents).await?;
+                Ok(serde_yaml::from_str(&contents)?)
+            }
+            Err(err) => {
+                if err.kind() == ErrorKind::NotFound {
+                    eprintln!("mods.yaml config file not found in current directory. Maybe you forgot to 'pack init'?");
+                }
+                Err(err.into())
+            }
+        }
     }
 
-    pub async fn try_save(&self) -> Result<(), Error> {
+    pub async fn try_save(&mut self) -> Result<(), Error> {
+        self.mods.sort();
         let contents = serde_yaml::to_string(&self)?;
         let mut file = File::create(Self::CONFIG_PATH).await?;
         file.write_all(contents.as_bytes()).await?;
@@ -98,12 +112,41 @@ impl Config {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct InstalledMod {
-    pub slug: String,
     pub version: String,
     pub file: String,
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct InstalledConfig {
-    pub installed: Vec<InstalledMod>,
+pub struct ModManifest {
+    pub installed: BTreeMap<String, InstalledMod>,
+}
+
+impl ModManifest {
+    const CONFIG_PATH: &str = ".installed.yaml";
+
+    pub async fn try_load() -> Result<ModManifest, Error> {
+        match tokio::fs::File::open(Self::CONFIG_PATH).await {
+            Ok(mut file) => {
+                let mut contents = String::new();
+                file.read_to_string(&mut contents).await?;
+                Ok(serde_yaml::from_str(&contents)?)
+            }
+            Err(err) => {
+                if err.kind() == ErrorKind::NotFound {
+                    Ok(ModManifest {
+                        installed: BTreeMap::new(),
+                    })
+                } else {
+                    Err(err.into())
+                }
+            }
+        }
+    }
+
+    pub async fn try_save(&self) -> Result<(), Error> {
+        let contents = serde_yaml::to_string(&self)?;
+        let mut file = File::create(Self::CONFIG_PATH).await?;
+        file.write_all(contents.as_bytes()).await?;
+        Ok(())
+    }
 }

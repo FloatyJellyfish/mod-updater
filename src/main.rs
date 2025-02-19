@@ -2,7 +2,7 @@
 
 use clap::{Parser, Subcommand, ValueEnum};
 use mod_updater::modrinth::{GameVersion, Loaders, SearchResult, Version};
-use mod_updater::{Config, Error};
+use mod_updater::{Config, Error, InstalledMod, ModManifest};
 use reqwest::{get, Client, ClientBuilder, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -10,6 +10,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::fs::FileType;
 use std::io::{prelude::*, stdin};
 use std::ops::Deref;
+use std::path::PathBuf;
 use tokio::fs::{copy, create_dir, read_dir, remove_file, try_exists, write, File};
 use tokio::io::{stdout, AsyncWriteExt};
 use tokio::task::{spawn_blocking, JoinSet};
@@ -120,26 +121,35 @@ async fn main() -> Result<(), Error> {
         } => {
             download_mod(client.clone(), mod_name, loader, game_version, latest).await?;
         }
-        Commands::Pack { command } => match command {
-            PackCommand::Download => {
-                download_mods(client.clone(), Config::try_load().await?).await?;
+        Commands::Pack { command } => {
+            let manifest = ModManifest::try_load().await?;
+            match command {
+                PackCommand::Download => {
+                    download_mods(client.clone(), Config::try_load().await?, manifest).await?;
+                }
+                PackCommand::Update => {
+                    update_mods(client.clone(), Config::try_load().await?).await?;
+                }
+                PackCommand::Upgrade => {
+                    upgrade_mods(client.clone(), Config::try_load().await?, manifest).await?;
+                }
+                PackCommand::Init {
+                    loader,
+                    game_version,
+                } => {
+                    pack_init(client.clone(), loader, game_version).await?;
+                }
+                PackCommand::Add { mod_name } => {
+                    add_mod(
+                        client.clone(),
+                        Config::try_load().await?,
+                        manifest,
+                        mod_name,
+                    )
+                    .await?;
+                }
             }
-            PackCommand::Update => {
-                update_mods(client.clone(), Config::try_load().await?).await?;
-            }
-            PackCommand::Upgrade => {
-                upgrade_mods(client.clone(), Config::try_load().await?).await?;
-            }
-            PackCommand::Init {
-                loader,
-                game_version,
-            } => {
-                pack_init(client.clone(), loader, game_version).await?;
-            }
-            PackCommand::Add { mod_name } => {
-                add_mod(client.clone(), Config::try_load().await?, mod_name).await?;
-            }
-        },
+        }
     }
 
     Ok(())
@@ -189,8 +199,14 @@ async fn download_mod(
     loader: Loaders,
     game_version: String,
     latest: bool,
-) -> Result<(), Error> {
-    let versions = get_versions(client.clone(), mod_name, Some(loader), Some(game_version)).await?;
+) -> Result<(String, InstalledMod), Error> {
+    let versions = get_versions(
+        client.clone(),
+        mod_name.clone(),
+        Some(loader),
+        Some(game_version),
+    )
+    .await?;
     if versions.is_empty() {
         return Err(Error::NoVersionsFound);
     }
@@ -257,7 +273,13 @@ async fn download_mod(
 
     download_file(client.clone(), file.url.clone(), file.filename.clone()).await?;
 
-    Ok(())
+    Ok((
+        mod_name,
+        InstalledMod {
+            version: version.name.clone(),
+            file: file.filename.clone(),
+        },
+    ))
 }
 
 async fn download_file(client: Client, url: String, path: String) -> Result<(), Error> {
@@ -373,22 +395,31 @@ async fn latest_compatible_version(
     Ok(compatible_versions[0].clone())
 }
 
-async fn download_mods(client: Client, config: Config) -> Result<(), Error> {
+async fn download_mods(
+    client: Client,
+    config: Config,
+    mut manifest: ModManifest,
+) -> Result<(), Error> {
     let mut set = JoinSet::new();
 
     for m in config.mods {
-        set.spawn(download_mod(
-            client.clone(),
-            m,
-            config.loader.clone(),
-            config.version.clone(),
-            true,
-        ));
+        if !manifest.installed.contains_key(&m) {
+            set.spawn(download_mod(
+                client.clone(),
+                m,
+                config.loader.clone(),
+                config.version.clone(),
+                true,
+            ));
+        }
     }
 
     while let Some(res) = set.join_next().await {
-        res??;
+        let (name, installed_mod) = res??;
+        manifest.installed.insert(name, installed_mod);
     }
+
+    manifest.try_save().await?;
 
     Ok(())
 }
@@ -462,7 +493,11 @@ async fn update_mod(
     Ok(format!("Updated '{mod_name}' to '{}'", versions[0].name))
 }
 
-async fn upgrade_mods(client: Client, config: Config) -> Result<(), Error> {
+async fn upgrade_mods(
+    client: Client,
+    config: Config,
+    mut manifest: ModManifest,
+) -> Result<(), Error> {
     let game_versions = get_game_versions(client.clone()).await?;
 
     let current_version = config.version;
@@ -516,6 +551,15 @@ async fn upgrade_mods(client: Client, config: Config) -> Result<(), Error> {
     if !try_exists("./old/").await? {
         create_dir("./old/").await?;
     }
+
+    for (name, installed_mod) in manifest.installed.iter() {
+        copy(
+            ["./", &installed_mod.file].iter().collect::<PathBuf>(),
+            ["./old", &installed_mod.file].iter().collect::<PathBuf>(),
+        )
+        .await?;
+    }
+
     let mut dir = read_dir("./").await?;
     while let Some(entry) = dir.next_entry().await? {
         if entry.file_type().await?.is_file()
@@ -530,12 +574,12 @@ async fn upgrade_mods(client: Client, config: Config) -> Result<(), Error> {
         }
     }
 
-    let new_config = Config {
+    let mut new_config = Config {
         version: version.to_string(),
         ..config
     };
 
-    download_mods(client.clone(), new_config.clone()).await?;
+    download_mods(client.clone(), new_config.clone(), manifest).await?;
 
     new_config.try_save().await?;
 
@@ -554,7 +598,7 @@ async fn get_game_versions(client: Client) -> Result<Vec<GameVersion>, Error> {
 }
 
 async fn pack_init(client: Client, loader: Loaders, game_version: String) -> Result<(), Error> {
-    let config = Config {
+    let mut config = Config {
         loader,
         version: game_version,
         mods: Vec::new(),
@@ -564,7 +608,12 @@ async fn pack_init(client: Client, loader: Loaders, game_version: String) -> Res
     Ok(())
 }
 
-async fn add_mod(client: Client, mut config: Config, mod_name: String) -> Result<(), Error> {
+async fn add_mod(
+    client: Client,
+    mut config: Config,
+    mut manifest: ModManifest,
+    mod_name: String,
+) -> Result<(), Error> {
     let request = client.get("https://api.modrinth.com/v2/search").query(&[
         ("query", mod_name.as_str()),
         (
@@ -614,7 +663,12 @@ async fn add_mod(client: Client, mut config: Config, mod_name: String) -> Result
         return Err(res.status().into());
     };
 
-    download_mod(
+    if config.mods.contains(&mod_slug) {
+        println!("'{mod_slug}' already present in pack");
+        return Ok(());
+    }
+
+    let (name, installed_mod) = download_mod(
         client.clone(),
         mod_slug.clone(),
         config.loader.clone(),
@@ -624,6 +678,8 @@ async fn add_mod(client: Client, mut config: Config, mod_name: String) -> Result
     .await?;
     config.mods.push(mod_slug.clone());
     config.try_save().await?;
+    manifest.installed.insert(mod_slug.clone(), installed_mod);
+    manifest.try_save().await?;
     println!("'{mod_slug}' added");
     Ok(())
 }

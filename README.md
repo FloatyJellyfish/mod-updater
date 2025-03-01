@@ -62,6 +62,12 @@ Remove mod from modpack.
 
 Example `mod-updater pack remove "sodium"`
 
+### List
+
+List mods in modpack.
+
+**Usage**: `mod-updater pack list`
+
 ## Other Commands
 
 These commands don't operate on a pack. They require the slug or id of the mod on Modrinth (e.g. the slug for https://modrinth.com/mod/sodium is `sodium`).

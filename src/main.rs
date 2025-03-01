@@ -93,6 +93,8 @@ enum PackCommand {
     Add { mod_name: String },
     /// Remove mod from modpack
     Remove { mod_name: String },
+    /// List mods in modpack
+    List,
 }
 
 #[tokio::main]
@@ -159,6 +161,7 @@ async fn main() -> Result<(), Error> {
                     )
                     .await?
                 }
+                PackCommand::List => list_mods(client.clone(), Config::try_load().await?).await?,
             }
         }
     }
@@ -718,6 +721,15 @@ async fn remove_mod(
     manifest.try_save().await?;
 
     println!("Mod '{mod_name}' removed from pack");
+
+    Ok(())
+}
+
+async fn list_mods(client: Client, config: Config) -> Result<(), Error> {
+    println!("Mods in pack:");
+    for m in config.mods {
+        println!("\t{m}");
+    }
 
     Ok(())
 }

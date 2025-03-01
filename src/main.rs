@@ -91,6 +91,8 @@ enum PackCommand {
     },
     /// Add mod to modpack
     Add { mod_name: String },
+    /// Remove mod from modpack
+    Remove { mod_name: String },
 }
 
 #[tokio::main]
@@ -147,6 +149,15 @@ async fn main() -> Result<(), Error> {
                         mod_name,
                     )
                     .await?;
+                }
+                PackCommand::Remove { mod_name } => {
+                    remove_mod(
+                        client.clone(),
+                        Config::try_load().await?,
+                        manifest,
+                        mod_name,
+                    )
+                    .await?
                 }
             }
         }
@@ -681,5 +692,32 @@ async fn add_mod(
     manifest.installed.insert(mod_slug.clone(), installed_mod);
     manifest.try_save().await?;
     println!("'{mod_slug}' added");
+    Ok(())
+}
+
+async fn remove_mod(
+    client: Client,
+    mut config: Config,
+    mut manifest: ModManifest,
+    mod_name: String,
+) -> Result<(), Error> {
+    if !config.mods.contains(&mod_name) {
+        println!("No mod '{mod_name}' in pack");
+        return Ok(());
+    }
+
+    config.mods.retain(|m| *m != mod_name);
+
+    if let Some(installed_mod) = manifest.installed.get(&mod_name) {
+        remove_file(&installed_mod.file).await?;
+    }
+
+    manifest.installed.remove(&mod_name);
+
+    config.try_save().await?;
+    manifest.try_save().await?;
+
+    println!("Mod '{mod_name}' removed from pack");
+
     Ok(())
 }

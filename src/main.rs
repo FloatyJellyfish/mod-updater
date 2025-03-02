@@ -1,23 +1,13 @@
-#![allow(unused)]
-
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 use mod_updater::modrinth::{GameVersion, Loaders, SearchResult, Version};
 use mod_updater::{Config, Error, InstalledMod, ModManifest};
-use reqwest::{get, Client, ClientBuilder, StatusCode};
-use serde::{Deserialize, Serialize};
+use reqwest::{Client, ClientBuilder};
 use std::collections::HashMap;
-use std::fmt::{Debug, Display, Formatter};
-use std::fs::FileType;
-use std::io::{prelude::*, stdin};
-use std::ops::Deref;
+use std::io::stdin;
 use std::path::PathBuf;
-use tokio::fs::{copy, create_dir, read_dir, remove_file, try_exists, write, File};
+use tokio::fs::{copy, create_dir, read_dir, remove_file, try_exists};
 use tokio::io::{stdout, AsyncWriteExt};
 use tokio::task::{spawn_blocking, JoinSet};
-
-// pub use mod_updater::Loaders;
-
-const INSTALLED_MODS_PATH: &str = "installed.yaml";
 
 static APP_USER_AGENT: &str = concat!(
     "FloatyJellyfish",
@@ -141,7 +131,7 @@ async fn main() -> Result<(), Error> {
                     loader,
                     game_version,
                 } => {
-                    pack_init(client.clone(), loader, game_version).await?;
+                    pack_init(loader, game_version).await?;
                 }
                 PackCommand::Add { mod_name } => {
                     add_mod(
@@ -153,15 +143,9 @@ async fn main() -> Result<(), Error> {
                     .await?;
                 }
                 PackCommand::Remove { mod_name } => {
-                    remove_mod(
-                        client.clone(),
-                        Config::try_load().await?,
-                        manifest,
-                        mod_name,
-                    )
-                    .await?
+                    remove_mod(Config::try_load().await?, manifest, mod_name).await?
                 }
-                PackCommand::List => list_mods(client.clone(), Config::try_load().await?).await?,
+                PackCommand::List => list_mods(Config::try_load().await?).await?,
             }
         }
     }
@@ -233,12 +217,15 @@ async fn download_mod(
             println!("\t{i} - {}", version.name);
         }
         println!("Select version (0-{}):", versions.len() - 1);
-        let buffer = spawn_blocking(move || {
+        let buffer: String = spawn_blocking(move || {
             let mut buffer = String::new();
-            stdin().read_line(&mut buffer);
-            buffer
+
+            match stdin().read_line(&mut buffer) {
+                Ok(_) => Ok::<std::string::String, Error>(buffer),
+                Err(err) => Err(err.into()),
+            }
         })
-        .await?;
+        .await??;
 
         let version_i: usize = if let Ok(version_i) = buffer.trim().parse() {
             if version_i >= versions.len() {
@@ -269,10 +256,12 @@ async fn download_mod(
         println!("Select file (0-{}):", version.files.len() - 1);
         let buffer = spawn_blocking(move || {
             let mut buffer = String::new();
-            stdin().read_line(&mut buffer);
-            buffer
+            match stdin().read_line(&mut buffer) {
+                Ok(_) => Ok::<std::string::String, Error>(buffer),
+                Err(err) => Err(err.into()),
+            }
         })
-        .await?;
+        .await??;
         let file_i: usize = if let Ok(file_i) = buffer.trim().parse() {
             if file_i >= versions.len() {
                 return Err(Error::InvalidIndex);
@@ -390,7 +379,7 @@ async fn compatible_versions(
 
     let mut compatible_versions = Vec::new();
     let mods_count = mods.len();
-    for (i, (version, count)) in version_support.iter().enumerate() {
+    for (version, count) in version_support.iter() {
         if *count == mods_count {
             compatible_versions.push((*version).clone());
         }
@@ -398,15 +387,6 @@ async fn compatible_versions(
     compatible_versions.sort_by(|a, b| a.date.cmp(&b.date));
     compatible_versions.reverse();
     Ok(compatible_versions)
-}
-
-async fn latest_compatible_version(
-    client: Client,
-    mods: Vec<String>,
-    loader: Loaders,
-) -> Result<GameVersion, Error> {
-    let compatible_versions = compatible_versions(client, mods, loader).await?;
-    Ok(compatible_versions[0].clone())
 }
 
 async fn download_mods(
@@ -477,7 +457,6 @@ async fn update_mod(
     )
     .await?;
 
-    let mut up_to_date = false;
     let mut exsiting = Vec::new();
     let latest_file = &versions[0].files[0];
     while let Some(entry) = entries.next_entry().await? {
@@ -507,11 +486,7 @@ async fn update_mod(
     Ok(format!("Updated '{mod_name}' to '{}'", versions[0].name))
 }
 
-async fn upgrade_mods(
-    client: Client,
-    config: Config,
-    mut manifest: ModManifest,
-) -> Result<(), Error> {
+async fn upgrade_mods(client: Client, config: Config, manifest: ModManifest) -> Result<(), Error> {
     let game_versions = get_game_versions(client.clone()).await?;
 
     let current_version = config.version;
@@ -546,10 +521,12 @@ async fn upgrade_mods(
     println!("Select game version (0-{}):", compatible_versions.len() - 1);
     let buffer = spawn_blocking(move || {
         let mut buffer = String::new();
-        stdin().read_line(&mut buffer);
-        buffer
+        match stdin().read_line(&mut buffer) {
+            Ok(_) => Ok::<std::string::String, Error>(buffer),
+            Err(err) => Err(err.into()),
+        }
     })
-    .await?;
+    .await??;
     let i: usize = if let Ok(i) = buffer.trim().parse() {
         if i >= compatible_versions.len() {
             return Err(Error::InvalidIndex);
@@ -566,7 +543,7 @@ async fn upgrade_mods(
         create_dir("./old/").await?;
     }
 
-    for (name, installed_mod) in manifest.installed.iter() {
+    for (_name, installed_mod) in manifest.installed.iter() {
         copy(
             ["./", &installed_mod.file].iter().collect::<PathBuf>(),
             ["./old", &installed_mod.file].iter().collect::<PathBuf>(),
@@ -611,7 +588,7 @@ async fn get_game_versions(client: Client) -> Result<Vec<GameVersion>, Error> {
     }
 }
 
-async fn pack_init(client: Client, loader: Loaders, game_version: String) -> Result<(), Error> {
+async fn pack_init(loader: Loaders, game_version: String) -> Result<(), Error> {
     let mut config = Config {
         loader,
         version: game_version,
@@ -655,10 +632,12 @@ async fn add_mod(
             println!("Select mod (0-{}):", search_result.hits.len() - 1);
             let buffer = spawn_blocking(move || {
                 let mut buffer = String::new();
-                stdin().read_line(&mut buffer);
-                buffer
+                match stdin().read_line(&mut buffer) {
+                    Ok(_) => Ok::<std::string::String, Error>(buffer),
+                    Err(err) => Err(err.into()),
+                }
             })
-            .await?;
+            .await??;
             let i: usize = if let Ok(i) = buffer.trim().parse() {
                 if i >= search_result.hits.len() {
                     return Err(Error::InvalidIndex);
@@ -682,7 +661,7 @@ async fn add_mod(
         return Ok(());
     }
 
-    let (name, installed_mod) = download_mod(
+    let (_name, installed_mod) = download_mod(
         client.clone(),
         mod_slug.clone(),
         config.loader.clone(),
@@ -699,7 +678,6 @@ async fn add_mod(
 }
 
 async fn remove_mod(
-    client: Client,
     mut config: Config,
     mut manifest: ModManifest,
     mod_name: String,
@@ -725,7 +703,7 @@ async fn remove_mod(
     Ok(())
 }
 
-async fn list_mods(client: Client, config: Config) -> Result<(), Error> {
+async fn list_mods(config: Config) -> Result<(), Error> {
     println!("Mods in pack:");
     for m in config.mods {
         println!("\t{m}");

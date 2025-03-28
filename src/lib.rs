@@ -10,6 +10,7 @@ use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncWriteExt},
 };
+use clap::{Parser, Subcommand};
 
 pub mod modrinth;
 
@@ -149,4 +150,76 @@ impl ModManifest {
         file.write_all(contents.as_bytes()).await?;
         Ok(())
     }
+}
+
+#[derive(Parser)]
+#[command(name = "Mod Updater")]
+#[command(version)]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Commands,
+}
+
+#[derive(Subcommand, Clone)]
+pub enum Commands {
+    /// List all versions for a mod
+    Versions {
+        /// Mod slug or id
+        mod_name: String,
+        /// Filter by mod loader
+        #[arg(short, long)]
+        loader: Option<Loaders>,
+        /// Filter by game version (e.g. 1.21.4)
+        #[arg(short, long)]
+        game_version: Option<String>,
+    },
+    /// Get latest version of a mod for a given mod loader
+    Latest {
+        /// Mod slug or id
+        mod_name: String,
+        /// Filter by mod loader
+        loader: Loaders,
+        /// Filter by game version (e.g. 1.21.4)
+        game_version: Option<String>,
+    },
+    /// Download mod given a loader and game version
+    Download {
+        /// Mod slug or id
+        mod_name: String,
+        /// Filter by mod loader
+        loader: Loaders,
+        /// Filter by game version (e.g. 1.21.4)
+        game_version: String,
+        /// Download latest mod version (skip mod version selection)
+        #[arg(short, long)]
+        latest: bool,
+    },
+    /// Operate on a mod pack specified in 'mods.yaml'
+    Pack {
+        #[command(subcommand)]
+        command: PackCommand,
+    },
+}
+
+#[derive(Subcommand, Clone)]
+pub enum PackCommand {
+    /// Download the latest version of all mods in pack
+    Download,
+    /// Update mods to their latest versions
+    Update,
+    /// Check for compatible game versions and update all mods to selected version
+    Upgrade,
+    /// Create modpack definition
+    Init {
+        loader: Loaders,
+        game_version: String,
+    },
+    /// Add mod to modpack
+    Add { mod_name: String },
+    /// Remove mod from modpack
+    Remove { mod_name: String },
+    /// List mods in modpack
+    List,
+    /// List the latest game version for all mods in pack
+    LatestGameVersion,
 }

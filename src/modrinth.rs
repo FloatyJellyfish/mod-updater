@@ -72,7 +72,7 @@ impl Display for Loaders {
     }
 }
 
-#[derive(Deserialize, Hash, Clone)]
+#[derive(Deserialize, Hash, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum VersionType {
     Release,

@@ -54,6 +54,26 @@ Download all the mods in the pack (if they aren't already present). Useful if yo
 
 **Usage**: `mod-updater pack upgrade`
 
+### Remove
+
+Remove mod from modpack.
+
+**Usage**: `mod-updater pack remove <MOD_NAME>`
+
+Example `mod-updater pack remove "sodium"`
+
+### List
+
+List mods in modpack.
+
+**Usage**: `mod-updater pack list`
+
+### Latest Game Version
+
+List the latest game version for all mods in pack
+
+**Usage**: `mod-updater pack latest-game-version`
+
 ## Other Commands
 
 These commands don't operate on a pack. They require the slug or id of the mod on Modrinth (e.g. the slug for https://modrinth.com/mod/sodium is `sodium`).

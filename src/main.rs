@@ -1,10 +1,11 @@
-use clap::{Parser, Subcommand};
-use mod_updater::modrinth::{GameVersion, Loaders, SearchResult, Version};
-use mod_updater::{Config, Error, InstalledMod, ModManifest};
+use clap::Parser;
+use mod_updater::modrinth::{GameVersion, Loaders, SearchResult, Version, VersionType};
+use mod_updater::{Config, Error, InstalledMod, ModManifest, Cli, Commands, PackCommand};
 use reqwest::{Client, ClientBuilder};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::stdin;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::fs::{copy, create_dir, read_dir, remove_file, try_exists};
 use tokio::io::{stdout, AsyncWriteExt};
 use tokio::task::{spawn_blocking, JoinSet};
@@ -16,76 +17,6 @@ static APP_USER_AGENT: &str = concat!(
     "/",
     env!("CARGO_PKG_VERSION"),
 );
-
-#[derive(Parser)]
-#[command(name = "Mod Updater")]
-#[command(version)]
-struct Cli {
-    #[command(subcommand)]
-    command: Commands,
-}
-
-#[derive(Subcommand, Clone)]
-enum Commands {
-    /// List all versions for a mod
-    Versions {
-        /// Mod slug or id
-        mod_name: String,
-        /// Filter by mod loader
-        #[arg(short, long)]
-        loader: Option<Loaders>,
-        /// Filter by game version (e.g. 1.21.4)
-        #[arg(short, long)]
-        game_version: Option<String>,
-    },
-    /// Get latest version of a mod for a given mod loader
-    Latest {
-        /// Mod slug or id
-        mod_name: String,
-        /// Filter by mod loader
-        loader: Loaders,
-        /// Filter by game version (e.g. 1.21.4)
-        game_version: Option<String>,
-    },
-    /// Download mod given a loader and game version
-    Download {
-        /// Mod slug or id
-        mod_name: String,
-        /// Filter by mod loader
-        loader: Loaders,
-        /// Filter by game version (e.g. 1.21.4)
-        game_version: String,
-        /// Download latest mod version (skip mod version selection)
-        #[arg(short, long)]
-        latest: bool,
-    },
-    /// Operate on a mod pack specified in 'mods.yaml'
-    Pack {
-        #[command(subcommand)]
-        command: PackCommand,
-    },
-}
-
-#[derive(Subcommand, Clone)]
-enum PackCommand {
-    /// Download the latest version of all mods in pack
-    Download,
-    /// Update mods to their latest versions
-    Update,
-    /// Check for compatible game versions and update all mods to selected version
-    Upgrade,
-    /// Create modpack definition
-    Init {
-        loader: Loaders,
-        game_version: String,
-    },
-    /// Add mod to modpack
-    Add { mod_name: String },
-    /// Remove mod from modpack
-    Remove { mod_name: String },
-    /// List mods in modpack
-    List,
-}
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
@@ -146,6 +77,9 @@ async fn main() -> Result<(), Error> {
                     remove_mod(Config::try_load().await?, manifest, mod_name).await?
                 }
                 PackCommand::List => list_mods(Config::try_load().await?).await?,
+                PackCommand::LatestGameVersion => {
+                    latest_game_version(client.clone(), Config::try_load().await?).await?
+                }
             }
         }
     }
@@ -708,6 +642,72 @@ async fn list_mods(config: Config) -> Result<(), Error> {
     for m in config.mods {
         println!("\t{m}");
     }
+
+    Ok(())
+}
+
+async fn latest_game_version(client: Client, config: Config) -> Result<(), Error> {
+    let game_versions: Vec<String> = get_game_versions(client.clone())
+        .await?
+        .into_iter()
+        .filter(|v| v.version_type == VersionType::Release)
+        .map(|v| v.version)
+        .collect();
+
+    let game_versions = Arc::new(game_versions);
+
+    let mut set = JoinSet::new();
+
+    for m in config.mods {
+        set.spawn(get_latest_mod_game_version(
+            client.clone(),
+            m.clone(),
+            game_versions.clone(),
+            config.loader.clone(),
+        ));
+    }
+
+    set.join_all().await;
+
+    Ok(())
+}
+
+async fn get_latest_mod_game_version(
+    client: Client,
+    mod_name: String,
+    game_versions: Arc<Vec<String>>,
+    loader: Loaders,
+) -> Result<(), Error> {
+    let mod_versions = get_versions(client.clone(), mod_name.clone(), Some(loader), None).await?;
+    let mut mod_game_versions = HashSet::new();
+    for mod_version in mod_versions {
+        for game_version in mod_version.game_versions {
+            mod_game_versions.insert(game_version);
+        }
+    }
+    let mut mod_game_versions: Vec<String> = mod_game_versions
+        .into_iter()
+        .filter(|v| game_versions.contains(v))
+        .collect();
+    mod_game_versions.sort_by(|a, b| {
+        game_versions
+            .iter()
+            .position(|v| v == a)
+            .expect("Invalid game version")
+            .cmp(
+                &game_versions
+                    .iter()
+                    .position(|v| v == b)
+                    .expect("Invalid game version"),
+            )
+    });
+    println!(
+        "{} - {}",
+        mod_name,
+        mod_game_versions
+            .first()
+            .expect("Mod has no supported game versions")
+    );
 
     Ok(())
 }

@@ -68,6 +68,12 @@ List mods in modpack.
 
 **Usage**: `mod-updater pack list`
 
+### Latest Game Version
+
+List the latest game version for all mods in pack
+
+**Usage**: `mod-updater pack latest-game-version`
+
 ## Other Commands
 
 These commands don't operate on a pack. They require the slug or id of the mod on Modrinth (e.g. the slug for https://modrinth.com/mod/sodium is `sodium`).
